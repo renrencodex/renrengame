@@ -1,21 +1,34 @@
 import { MAX_NAME_LENGTH, MAX_TOKEN_LENGTH } from './constants';
 
+export type EntityKind = 'player' | 'monster';
+
+/** 实体在快照里的状态。 */
+export const STATE_IDLE = 0;
+export const STATE_MOVING = 1;
+export const STATE_DEAD = 2;
+export type EntityState = typeof STATE_IDLE | typeof STATE_MOVING | typeof STATE_DEAD;
+
 /** 实体进入视野时下发的完整信息。 */
 export interface EntityInfo {
   id: number;
+  kind: EntityKind;
   name: string;
   x: number;
   z: number;
-  moving: boolean;
+  state: EntityState;
+  hp: number;
+  maxHp: number;
 }
 
 /** 快照里的一个实体，用元组以减小体积。 */
-export type SnapEntity = [id: number, x: number, z: number, moving: 0 | 1];
+export type SnapEntity = [id: number, x: number, z: number, state: EntityState, hp: number];
 
 export type ClientMsg =
   /** token 是登录接口返回的会话令牌，服务端用它确定是哪个角色。 */
   | { t: 'join'; token: string }
   | { t: 'moveTo'; x: number; z: number }
+  /** 选中一个怪物作为攻击目标。id 为 0 表示取消目标。 */
+  | { t: 'target'; id: number }
   | { t: 'ping'; c: number };
 
 export type ServerMsg =
@@ -23,6 +36,8 @@ export type ServerMsg =
   | { t: 'enter'; entities: EntityInfo[] }
   | { t: 'leave'; ids: number[] }
   | { t: 'snap'; time: number; entities: SnapEntity[] }
+  /** 一次命中。只用来播放动作和显示伤害数字，血量以快照为准。 */
+  | { t: 'hit'; from: number; to: number; damage: number }
   | { t: 'pong'; c: number; s: number };
 
 // 编解码都收在这里，以后换成二进制协议只需要改这个文件。
@@ -48,6 +63,8 @@ export function decodeClientMsg(raw: string): ClientMsg | null {
         : null;
     case 'moveTo':
       return isFiniteNumber(m.x) && isFiniteNumber(m.z) ? { t: 'moveTo', x: m.x, z: m.z } : null;
+    case 'target':
+      return Number.isSafeInteger(m.id) && (m.id as number) >= 0 ? { t: 'target', id: m.id as number } : null;
     case 'ping':
       return isFiniteNumber(m.c) ? { t: 'ping', c: m.c } : null;
     default:

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mulberry32 } from '@mmo/shared';
+import { mulberry32, SAFE_ZONE_RADIUS } from '@mmo/shared';
 import type { GameMap } from '@mmo/shared';
 
 const SKY_COLOR = 0xa8c8e8;
@@ -11,7 +11,7 @@ const OBSTACLE_INSET = 0.15;
 /** 地面贴图一格对应的世界单位。 */
 const GROUND_TILE = 4;
 
-/** 3D 场景：地面、障碍物、光照和雾。 */
+/** 3D 场景：地面、障碍物、安全区边界、光照和雾。 */
 export class WorldScene {
   readonly scene = new THREE.Scene();
   private readonly sun: THREE.DirectionalLight;
@@ -37,7 +37,7 @@ export class WorldScene {
     scene.add(sun, sun.target);
     this.sun = sun;
 
-    scene.add(createGround(map.size), createSurroundings(map.size), createObstacles(map));
+    scene.add(createGround(map.size), createSurroundings(map.size), createObstacles(map), createSafeZoneRing(map.size));
     this.followSun(map.size / 2, map.size / 2);
   }
 
@@ -71,6 +71,18 @@ function createSurroundings(size: number): THREE.Mesh {
   outer.rotation.x = -Math.PI / 2;
   outer.position.set(size / 2, -0.05, size / 2);
   return outer;
+}
+
+/** 出生点周围安全区的边界：地上的一圈浅色线，怪物不会越过它。 */
+function createSafeZoneRing(size: number): THREE.Mesh {
+  const geometry = new THREE.RingGeometry(SAFE_ZONE_RADIUS - 0.12, SAFE_ZONE_RADIUS + 0.12, 128);
+  geometry.rotateX(-Math.PI / 2);
+  const ring = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ color: 0xd8f6ff, transparent: true, opacity: 0.55, depthWrite: false }),
+  );
+  ring.position.set(size / 2, 0.03, size / 2);
+  return ring;
 }
 
 /** 用 canvas 画一张可平铺的草地贴图，带浅浅的格线，移动时能看出速度。 */

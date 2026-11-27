@@ -1,8 +1,9 @@
 /**
- * 机器人压测：连上 N 个机器人在地图上随机走动，统计每个机器人收到的同步量。
+ * 机器人压测：连上 N 个机器人在地图上随机走动，附近有怪物时上去打，
+ * 统计每个机器人收到的同步量，以及命中、击杀和死亡的次数。
  *
- * 用法：pnpm bots [--count 200] [--duration 30] [--url ws://localhost:8080/ws] [--password ...]
- * duration 为 0 时一直运行，直到按 Ctrl+C。
+ * 用法：pnpm bots [--count 200] [--duration 30] [--url ws://localhost:8080/ws] [--password ...] [--peaceful]
+ * duration 为 0 时一直运行，直到按 Ctrl+C。加 --peaceful 时机器人只走路、不主动打怪（怪物仍然会打它们）。
  *
  * 机器人用的账号是“机器人1”“机器人2”……，第一次运行时自动注册，之后直接登录。
  * 这些账号的密码是公开的默认值，只适合本地压测；对着公开的服务器跑时请用 --password 换一个。
@@ -11,15 +12,18 @@ import { parseArgs } from 'node:util';
 import { WebSocket } from 'ws';
 import {
   API_PATH,
+  CLIENT_ATTACK_RANGE,
   CLIENT_MOVE_DISTANCE,
   decodeServerMsg,
   encode,
   generateMap,
   isValidMoveTarget,
   SERVER_PORT,
+  STATE_DEAD,
+  STATE_MOVING,
   WS_PATH,
 } from '@mmo/shared';
-import type { ApiError, AuthRequest, AuthSuccess, ClientMsg, GameMap, Point } from '@mmo/shared';
+import type { ApiError, AuthRequest, AuthSuccess, ClientMsg, EntityKind, EntityState, GameMap, Point } from '@mmo/shared';
 
 const { values } = parseArgs({
   options: {
@@ -27,6 +31,7 @@ const { values } = parseArgs({
     duration: { type: 'string', default: '30' },
     url: { type: 'string', default: `ws://localhost:${SERVER_PORT}${WS_PATH}` },
     password: { type: 'string', default: 'local-bots-only' },
+    peaceful: { type: 'boolean', default: false },
   },
   allowPositionals: true,
 });
@@ -35,7 +40,16 @@ const COUNT = Math.max(1, Number(values.count) || 200);
 const DURATION_S = Math.max(0, Number(values.duration) || 0);
 const URL_WS = values.url;
 const PASSWORD = values.password;
+const FIGHT = !values.peaceful;
 const REPORT_EVERY_MS = 5000;
+/** 这么近的怪物才会去打。 */
+const ENGAGE_RADIUS = 18;
+/** 追击时重新发移动命令的最短间隔，以及目标离上一次命令的终点多远才重新发（和客户端一致）。 */
+const CHASE_EVERY_MS = 250;
+const CHASE_REORDER_DISTANCE = 1;
+/** 同一只怪物追了这么久还没打死就放弃（比如它在墙后面够不着），歇一会儿再找别的。 */
+const GIVE_UP_MS = 20000;
+const REST_MS = 5000;
 /** 同时进行的登录请求数。服务端算密码哈希比较慢，开太多只会排队。 */
 const LOGIN_CONCURRENCY = 8;
 
@@ -84,18 +98,40 @@ async function obtainTokens(count: number): Promise<string[]> {
 
 let map: GameMap | null = null;
 
+/** 机器人视野里的一个实体。 */
+interface Seen {
+  kind: EntityKind;
+  x: number;
+  z: number;
+  state: EntityState;
+}
+
 class Bot {
   selfId = -1;
   x = 0;
   z = 0;
   ready = false;
   closed = false;
-  readonly visible = new Set<number>();
+  /** 视野内的实体，包括自己。 */
+  readonly visible = new Map<number, Seen>();
   snaps = 0;
   bytes = 0;
   /** 快照里出现、但没有先收到 enter 的实体数。应该一直是 0。 */
   unknownInSnap = 0;
+  hitsDealt = 0;
+  hitsTaken = 0;
+  kills = 0;
+  deaths = 0;
   nextMoveAt = 0;
+  private moving = false;
+  private dead = false;
+  private targetId = 0;
+  private engagedAt = 0;
+  private nextChaseAt = 0;
+  private chaseTo: Point | null = null;
+  private restUntil = 0;
+  /** 每个实体最近一次是被谁打中的，用来判断怪物是不是自己打死的。 */
+  private readonly lastAttacker = new Map<number, number>();
   private destination: Point | null = null;
   private readonly ws: WebSocket;
 
@@ -132,35 +168,120 @@ class Bot {
         break;
       case 'enter':
         for (const e of msg.entities) {
-          this.visible.add(e.id);
-          if (e.id === this.selfId) {
-            this.x = e.x;
-            this.z = e.z;
-            this.ready = true;
-          }
+          this.visible.set(e.id, { kind: e.kind, x: e.x, z: e.z, state: e.state });
+          if (e.id === this.selfId) this.onSelfState(e.x, e.z, e.state);
         }
         break;
       case 'leave':
-        for (const id of msg.ids) this.visible.delete(id);
+        for (const id of msg.ids) {
+          this.visible.delete(id);
+          this.lastAttacker.delete(id);
+        }
         break;
       case 'snap':
         this.snaps++;
-        for (const [id, x, z] of msg.entities) {
-          if (!this.visible.has(id)) this.unknownInSnap++;
-          if (id === this.selfId) {
-            this.x = x;
-            this.z = z;
+        for (const [id, x, z, state] of msg.entities) {
+          const seen = this.visible.get(id);
+          if (!seen) {
+            this.unknownInSnap++;
+            continue;
           }
+          if (state === STATE_DEAD && seen.state !== STATE_DEAD && seen.kind === 'monster') {
+            if (this.lastAttacker.get(id) === this.selfId) this.kills++;
+          }
+          seen.x = x;
+          seen.z = z;
+          seen.state = state;
+          if (id === this.selfId) this.onSelfState(x, z, state);
         }
+        break;
+      case 'hit':
+        if (msg.from === this.selfId) this.hitsDealt++;
+        if (msg.to === this.selfId) this.hitsTaken++;
+        this.lastAttacker.set(msg.to, msg.from);
         break;
       case 'pong':
         break;
     }
   }
 
+  private onSelfState(x: number, z: number, state: EntityState): void {
+    this.x = x;
+    this.z = z;
+    this.moving = state === STATE_MOVING;
+    this.ready = true;
+    const dead = state === STATE_DEAD;
+    if (dead && !this.dead) {
+      this.deaths++;
+      this.targetId = 0;
+      this.destination = null;
+    }
+    this.dead = dead;
+  }
+
+  /** 每 100 毫秒调用一次：死了就等复活，附近有怪物就打，否则随机走动。 */
+  act(now: number): void {
+    if (!this.ready || !map || this.dead) return;
+    if (FIGHT && this.fight(now, map)) return;
+    this.wander(now, map);
+  }
+
+  /**
+   * 打怪。和真正的客户端一样：选中目标后自己走过去，走到攻击距离内停下，伤害由服务端判定。
+   * 返回 false 表示现在没有可打的怪物。
+   */
+  private fight(now: number, map: GameMap): boolean {
+    let target = this.targetId !== 0 ? this.visible.get(this.targetId) : undefined;
+    if (this.targetId !== 0 && (!target || target.state === STATE_DEAD || now - this.engagedAt > GIVE_UP_MS)) {
+      // 目标死了、离开了视野，或者追了太久。
+      if (target?.state !== STATE_DEAD) this.send({ t: 'target', id: 0 });
+      if (target && target.state !== STATE_DEAD) this.restUntil = now + REST_MS;
+      this.targetId = 0;
+      target = undefined;
+    }
+    if (!target) {
+      if (now < this.restUntil) return false;
+      let bestDistance = ENGAGE_RADIUS;
+      for (const [id, e] of this.visible) {
+        if (e.kind !== 'monster' || e.state === STATE_DEAD) continue;
+        const d = Math.hypot(e.x - this.x, e.z - this.z);
+        if (d < bestDistance) {
+          bestDistance = d;
+          this.targetId = id;
+          target = e;
+        }
+      }
+      if (!target) return false;
+      this.engagedAt = now;
+      this.nextChaseAt = 0;
+      this.chaseTo = null;
+      this.send({ t: 'target', id: this.targetId });
+    }
+
+    if (now < this.nextChaseAt) return true;
+    if (Math.hypot(target.x - this.x, target.z - this.z) <= CLIENT_ATTACK_RANGE) {
+      // 够近了：还在走就停下，服务端只在站定时结算攻击。
+      this.chaseTo = null;
+      if (this.moving) {
+        this.nextChaseAt = now + CHASE_EVERY_MS;
+        this.send({ t: 'moveTo', x: this.x, z: this.z });
+      }
+      return true;
+    }
+    // 正朝目标走、目标也没怎么动时，不用重复发。
+    const to = this.chaseTo;
+    if (this.moving && to && Math.hypot(target.x - to.x, target.z - to.z) <= CHASE_REORDER_DISTANCE) return true;
+    this.nextChaseAt = now + CHASE_EVERY_MS;
+    if (isValidMoveTarget(map, this.x, this.z, target.x, target.z, CLIENT_MOVE_DISTANCE)) {
+      this.chaseTo = { x: target.x, z: target.z };
+      this.send({ t: 'moveTo', x: target.x, z: target.z });
+    }
+    return true;
+  }
+
   /** 朝一个随机的远处目的地走，每次走一段，到了再换目的地。 */
-  maybeMove(now: number): void {
-    if (!this.ready || !map || now < this.nextMoveAt) return;
+  private wander(now: number, map: GameMap): void {
+    if (now < this.nextMoveAt) return;
     this.nextMoveAt = now + 500 + Math.random() * 2500;
 
     if (!this.destination || Math.hypot(this.destination.x - this.x, this.destination.z - this.z) < 6) {
@@ -209,7 +330,7 @@ const spawnTimer = setInterval(() => {
 
 const moveTimer = setInterval(() => {
   const now = Date.now();
-  for (const bot of bots) bot.maybeMove(now);
+  for (const bot of bots) bot.act(now);
 }, 100);
 
 function report(label: string): void {
@@ -221,10 +342,18 @@ function report(label: string): void {
   let snaps = 0;
   let bytes = 0;
   let unknown = 0;
+  let hitsDealt = 0;
+  let hitsTaken = 0;
+  let kills = 0;
+  let deaths = 0;
   for (const b of bots) {
     snaps += b.snaps;
     bytes += b.bytes;
     unknown += b.unknownInSnap;
+    hitsDealt += b.hitsDealt;
+    hitsTaken += b.hitsTaken;
+    kills += b.kills;
+    deaths += b.deaths;
   }
   for (const b of online) {
     visibleSum += b.visible.size;
@@ -234,7 +363,7 @@ function report(label: string): void {
   console.log(
     `[bots] ${label} 在线 ${online.length}/${COUNT} | 视野内实体 平均 ${(visibleSum / n).toFixed(1)} 最多 ${visibleMax} | ` +
       `每个机器人 ${((snaps - lastSnaps) / seconds / n).toFixed(1)} 快照/秒 ${((bytes - lastBytes) / seconds / n / 1024).toFixed(2)} KB/秒 | ` +
-      `快照里的未知实体 ${unknown}`,
+      `快照里的未知实体 ${unknown} | 累计 命中 ${hitsDealt} 被命中 ${hitsTaken} 击杀 ${kills} 死亡 ${deaths}`,
   );
   lastReportAt = now;
   lastSnaps = snaps;

@@ -28,7 +28,7 @@ pnpm bots --count 50 --duration 15   # 机器人压测，需要服务器在运�
 ## 改完代码怎么验证
 
 1. 每次都跑 `pnpm typecheck` 和 `pnpm test`。
-2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。
+2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。机器人会打怪，“命中”应该大于 0；机器人很多时它们几乎不会死，死亡和复活要靠单测或者自己进游戏验证。
 3. 改了客户端的画面或交互，单测覆盖不到。可以用无头 Chromium 打开页面检查，启动参数加 `--use-angle=swiftshader --enable-unsafe-swiftshader` 才有 WebGL。做不了就在回复里明确说画面没有验证过。
 
 新增逻辑时把测试放在对应包的 `test/` 目录，文件名以 `.test.ts` 结尾。
@@ -37,8 +37,20 @@ pnpm bots --count 50 --duration 15   # 机器人压测，需要服务器在运�
 
 **服务器权威**
 
-- 客户端只发送意图（比如 `moveTo`），位置等状态一律由服务器计算。不要加“客户端上报自己位置”这类消息。
+- 客户端只发送意图（`moveTo`：想去哪，`target`：想打谁），位置、血量等状态一律由服务器计算。不要加“客户端上报自己位置”“客户端上报造成了多少伤害”这类消息。
 - 每一种客户端消息都要在 `shared/src/protocol.ts` 的 `decodeClientMsg` 里严格校验字段类型和范围，校验不过就丢弃。
+
+**追击由客户端驱动，服务端只判定伤害**
+
+- 玩家的移动只有 `moveTo` 这一个入口。选中怪物后，是客户端（`client/src/targeting.ts`）不断发 `moveTo` 把角色带到怪物旁边、够近了再发一次 `moveTo` 到自己的位置停下。不要在服务器里加“替玩家追目标”的逻辑，那样客户端的本地预测就对不上了。
+- 服务器的 `World.playerAttack` 只在“目标活着、玩家站定、距离不超过 `ATTACK_RANGE`、中间没有墙、冷却结束”时结算伤害。客户端停下的距离 `CLIENT_ATTACK_RANGE` 故意比 `ATTACK_RANGE` 小，给网络延迟留余量；改其中一个时要保持这个关系。
+- 血量和死亡状态以快照为准。`hit` 消息只用来播放动作和伤害数字，发送缓冲积压时会和快照一样被丢掉，不要让任何状态依赖它。
+
+**怪物和玩家是同一种实体**
+
+- 怪物和玩家共用 id 空间、AOI、`enter`、`leave` 和快照。实体进出视野统一走 `World` 的 `addToView`、`removeFromView`，玩家复活、怪物尸体消失和重生都是用它们实现的“离开再进入”，没有专门的消息。
+- 怪物 AI（`server/src/monsterAi.ts`）是同步的状态机，通过 `AiHost` 接口访问世界。怪物寻路有单独的每 tick 上限（`MAX_MONSTER_PATHFINDS_PER_TICK`），不占玩家的额度。
+- 怪物用的是另一个寻路器，安全区里的格子在它眼里是障碍，所以怪物的任何路线都不会穿过安全区。安全区按格子判定（`World.inSafeZone`），判定玩家是否安全和怪物能不能走进去必须用同一个边界。
 
 **共用的规则放在 shared**
 
@@ -49,7 +61,7 @@ pnpm bots --count 50 --duration 15   # 机器人压测，需要服务器在运�
 **游戏循环里不能等待 I/O**
 
 - `World.tick` 及它调用的代码必须是同步的，不能访问数据库或 Redis。
-- 要保存角色数据时，调用 `CharacterStore.markDirty` 记在内存里，由定时的 `flush` 批量写库。
+- 要保存角色数据（位置、血量）时，调用 `CharacterStore.markDirty` 记在内存里，由定时的 `flush` 批量写库。
 - `World` 不依赖 `ws`、`pg`、`redis`，只通过 `Connection` 接口发消息；`CharacterStore` 只依赖 `Queryable` 接口。保持这一点，它们才能脱离外部服务做单测。
 
 **进入世界的流程**
@@ -77,7 +89,8 @@ pnpm bots --count 50 --duration 15   # 机器人压测，需要服务器在运�
 ## 容易踩的坑
 
 - **不要提交 `packages/server/.env`**，里面有数据库密码，已经在 `.gitignore` 里。
-- `pnpm dev` 运行时，改动服务器或 `shared` 的文件会让服务器自动重启，在线的玩家会断线（位置会在关闭前保存）。
+- `pnpm dev` 运行时，改动服务器或 `shared` 的文件会让服务器自动重启，在线的玩家会断线（位置和血量会在关闭前保存），怪物全部重新生成。
+- 单测里要放障碍物时，在 `new World(map)` 之前改 `map.blocked`。`World` 在构造时为怪物复制了一份地图，之后再改，怪物看不到。
 - 数据库和 Redis 可能和别的项目共用同一个实例。只操作 `DATABASE_URL` 指向的库和带 `mmo:` 前缀的键，不要停止或重启这些服务，不要执行 `DROP`、`TRUNCATE`、`FLUSHALL`。
 - 测试时创建的账号用完要删掉。压测脚本的“机器人N”账号用的是公开的默认密码，只能出现在本地环境。
 - `packages/client/vite.config.ts` 的 `allowedHosts` 里放行了一个远程预览域名，换预览环境时要在这里加新的域名。

@@ -24,9 +24,10 @@ body {
 }
 
 .name-label {
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   color: #fff;
   font-size: 12px;
   line-height: 16px;
@@ -34,20 +35,117 @@ body {
   user-select: none;
 }
 
-.name-label.self {
+.name-text {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.name-label.self .name-text {
   color: #ffd76a;
+}
+
+.name-label.monster .name-text {
+  color: #ffb0a4;
+}
+
+.name-label.dead {
+  opacity: 0.45;
+}
+
+.hp-bar {
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.hp-fill {
+  height: 100%;
+  background: #6fd45a;
+  transition: width 0.12s linear;
+}
+
+.name-label.monster .hp-fill {
+  background: #e2523f;
+}
+
+.damage-text {
+  color: #fff3b0;
+  font-size: 16px;
+  font-weight: 700;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.9),
+    0 0 4px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.damage-text.taken {
+  color: #ff6a5a;
 }
 
 #hud {
   position: fixed;
   top: 10px;
   left: 10px;
-  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.5);
   color: #e8f0e4;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+}
+
+#hud[hidden],
+#banner[hidden] {
+  display: none;
+}
+
+.hud-hp {
+  position: relative;
+  width: 220px;
+  max-width: 60vw;
+  height: 16px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.hud-hp-fill {
+  height: 100%;
+  background: linear-gradient(#7bdc62, #4faa3a);
+  transition: width 0.15s linear;
+}
+
+.hud-hp-text {
+  position: absolute;
+  inset: 0;
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+#banner {
+  position: fixed;
+  top: 28%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 22px;
+  border-radius: 10px;
+  background: rgba(40, 8, 6, 0.78);
+  color: #ffd9d2;
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
   pointer-events: none;
   user-select: none;
 }

@@ -49,7 +49,10 @@ describe('World', () => {
 
     const [welcome, enter] = conn.take();
     expect(welcome).toEqual({ t: 'welcome', selfId: id, seed: 4242, serverTime: 1000 });
-    expect(enter).toEqual({ t: 'enter', entities: [{ id, name: '小明', x: 100, z: 100, moving: false }] });
+    expect(enter).toEqual({
+      t: 'enter',
+      entities: [{ id, kind: 'player', name: '小明', x: 100, z: 100, state: 0, hp: 100, maxHp: 100 }],
+    });
     expect(world.playerCount).toBe(1);
   });
 

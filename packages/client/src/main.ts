@@ -27,8 +27,8 @@ import { Net } from './net';
 type View = 'login' | 'resume' | 'ended';
 
 const HINTS: Record<View, string> = {
-  login: '登录或注册后进入世界。点击地面移动，按住可以连续移动，滚轮缩放。',
-  resume: '点击地面移动，按住可以连续移动，滚轮缩放。',
+  login: '登录或注册后进入世界。点击地面移动，按住可以连续移动；点击怪物攻击；滚轮缩放。',
+  resume: '点击地面移动，按住可以连续移动；点击怪物攻击；滚轮缩放。',
   ended: '',
 };
 
@@ -42,7 +42,7 @@ const welcomeBack = document.getElementById('welcome-back') as HTMLElement;
 const primaryButton = document.getElementById('primary-button') as HTMLButtonElement;
 const secondaryButton = document.getElementById('secondary-button') as HTMLButtonElement;
 const message = document.getElementById('overlay-message') as HTMLElement;
-const hud = new Hud(document.getElementById('hud') as HTMLElement);
+const hud = new Hud(document.getElementById('hud') as HTMLElement, document.getElementById('banner') as HTMLElement);
 
 let view: View = 'login';
 let busy = false;
