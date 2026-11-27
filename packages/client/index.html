@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>2.5D MMO 原型</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud" hidden></div>
+    <div id="overlay">
+      <form id="auth-form">
+        <h1>2.5D MMO 原型</h1>
+        <div id="login-fields">
+          <input id="username-input" type="text" maxlength="16" autocomplete="username" placeholder="账号名（2–16 个字符）" />
+          <input
+            id="password-input"
+            type="password"
+            maxlength="72"
+            autocomplete="current-password"
+            placeholder="密码（至少 6 位）"
+          />
+        </div>
+        <p id="welcome-back" hidden></p>
+        <button id="primary-button" type="submit">登录</button>
+        <button id="secondary-button" type="button">注册新账号</button>
+        <p id="overlay-message"></p>
+      </form>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

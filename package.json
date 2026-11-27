@@ -1,0 +1,30 @@
+{
+  "name": "mmo-25d",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.6.5",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @mmo/server --filter @mmo/client dev",
+    "dev:server": "pnpm --filter @mmo/server dev",
+    "dev:client": "pnpm --filter @mmo/client dev",
+    "start": "pnpm --filter @mmo/server start",
+    "build": "pnpm --filter @mmo/client build",
+    "test": "vitest run",
+    "typecheck": "pnpm -r typecheck",
+    "bots": "pnpm --filter @mmo/server bots"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "24",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.2"
+  }
+}

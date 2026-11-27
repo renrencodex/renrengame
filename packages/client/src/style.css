@@ -1,0 +1,145 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #1c2a1a;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+#app canvas {
+  display: block;
+  touch-action: none;
+}
+
+.label-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.name-label {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.name-label.self {
+  color: #ffd76a;
+}
+
+#hud {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #e8f0e4;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 24, 14, 0.82);
+}
+
+#overlay[hidden] {
+  display: none;
+}
+
+#auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(320px, 80vw);
+  padding: 24px;
+  border-radius: 12px;
+  background: #24331f;
+  color: #e8f0e4;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+#auth-form [hidden] {
+  display: none;
+}
+
+#auth-form h1 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+#login-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#welcome-back {
+  margin: 0;
+  font-size: 15px;
+}
+
+#auth-form input,
+#auth-form button {
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 15px;
+}
+
+#auth-form input {
+  background: #121a10;
+  color: #fff;
+  outline: 1px solid #3d5435;
+}
+
+#auth-form input:focus {
+  outline: 2px solid #8fce6b;
+}
+
+#auth-form button {
+  background: #6cb04a;
+  color: #10200a;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#auth-form #secondary-button {
+  background: transparent;
+  color: #b9d3ad;
+  font-weight: 500;
+  outline: 1px solid #3d5435;
+}
+
+#auth-form input:disabled,
+#auth-form button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+#overlay-message {
+  margin: 0;
+  color: #a9bda0;
+  font-size: 13px;
+  line-height: 1.5;
+}

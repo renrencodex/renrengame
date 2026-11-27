@@ -1,0 +1,25 @@
+{
+  "name": "@mmo/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "bots": "tsx scripts/bots.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@mmo/shared": "workspace:*",
+    "pg": "^8.23.1",
+    "redis": "^6.4.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "24",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
