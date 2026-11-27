@@ -23,6 +23,7 @@ import { createPool, migrate } from './db';
 import { errorText } from './errors';
 import { createHttpHandler } from './http';
 import { connectRedis } from './redis';
+import { loadStaticFiles } from './static';
 import { World } from './world';
 import type { Connection, PlayerState } from './world';
 
@@ -70,6 +71,8 @@ function toSave(state: PlayerState): CharacterState {
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  // 配置了客户端目录时，页面也由这个进程提供。目录不对的话在连数据库之前就报错。
+  const staticFiles = config.staticDir ? loadStaticFiles(config.staticDir) : undefined;
 
   const pool = createPool(config.databaseUrl);
   const migrated = await migrate(pool).catch((err: unknown) => {
@@ -237,7 +240,7 @@ async function main(): Promise<void> {
 
   // ---- HTTP 与 WebSocket ----
 
-  const httpServer = createServer(createHttpHandler({ auth, stats: statsSnapshot }));
+  const httpServer = createServer(createHttpHandler({ auth, stats: statsSnapshot, staticFiles }));
   const wss = new WebSocketServer({ server: httpServer, path: WS_PATH, maxPayload: MAX_PAYLOAD_BYTES });
   const alive = new WeakMap<WebSocket, boolean>();
 
@@ -390,10 +393,12 @@ async function main(): Promise<void> {
   };
   httpServer.on('error', onListenError);
   wss.on('error', onListenError);
-  httpServer.listen(config.port, () => {
+  httpServer.listen({ port: config.port, host: config.host }, () => {
+    const host = config.host?.includes(':') ? `[${config.host}]` : (config.host ?? 'localhost');
     console.log(
-      `[server] listening on http://localhost:${config.port} (WebSocket path ${WS_PATH}), ` +
-        `map seed ${config.mapSeed}, ${monsters} monsters`,
+      `[server] listening on http://${host}:${config.port} (WebSocket path ${WS_PATH}), ` +
+        `map seed ${config.mapSeed}, ${monsters} monsters` +
+        (staticFiles ? `, serving client from ${config.staticDir}` : ''),
     );
     loop();
   });

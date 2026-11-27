@@ -21,6 +21,7 @@ pnpm typecheck    # 三个包的类型检查
 pnpm test         # Vitest，不需要数据库和 Redis
 pnpm build        # 构建客户端
 pnpm bots --count 50 --duration 15   # 机器人压测，需要服务器在运行
+deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“线上环境”）
 ```
 
 启动服务器需要 PostgreSQL、Redis 和 `packages/server/.env`（参考 `.env.example`）。
@@ -78,6 +79,16 @@ pnpm bots --count 50 --duration 15   # 机器人压测，需要服务器在运�
 - 密码只存 scrypt 哈希，Redis 里只存会话令牌的哈希。不要把密码、令牌或连接串写进日志或错误信息。
 - Redis 的键都要带 `redis.ts` 里的 `KEY_PREFIX`。
 - 返回给客户端的错误信息不要包含内部细节，细节写服务器日志。
+
+## 线上环境
+
+这台开发机同时也是线上环境，改代码之前要知道：
+
+- 线上版本是 systemd 服务 `renrengame`，代码在 `/opt/renrengame/current`（某个提交的副本），配置在 `/etc/renrengame/env`，监听 `[::1]:5173`，玩家通过预览域名访问。工作区里的改动不会影响它，直到执行 `deploy/deploy.sh`。
+- **只有用户明确要求时才部署或重启线上服务。** 部署会让在线的玩家断线。
+- 线上占用了 5173 端口，`pnpm dev` 的客户端会自动换到下一个端口；游戏服务器的开发端口还是 8080。
+- 线上用的是 `mmo` 数据库和 Redis 的 0 号库，里面有真实玩家的账号。`packages/server/.env` 如果还指向它们，就不要启动开发服务器、不要对着它跑压测或测试脚本，先换成单独的开发库。
+- `deploy/deploy.sh` 生成 systemd 单元和配置文件；要改服务的运行方式就改脚本，不要手工改 `/etc/systemd/system/renrengame.service`，下次部署会被覆盖。
 
 ## 代码风格
 

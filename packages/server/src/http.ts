@@ -3,6 +3,8 @@ import { API_PATH, MAX_TOKEN_LENGTH } from '@mmo/shared';
 import type { ApiError } from '@mmo/shared';
 import type { Auth, AuthResult } from './auth';
 import { errorText } from './errors';
+import { serveStatic } from './static';
+import type { StaticFiles } from './static';
 
 /** 请求体的大小上限（字节）。账号名加密码远小于这个值。 */
 const MAX_BODY_BYTES = 2048;
@@ -19,9 +21,11 @@ class HttpError extends Error {
 export interface HttpDeps {
   auth: Auth;
   stats: () => unknown;
+  /** 构建好的客户端页面。不提供时（比如开发时页面由 Vite 提供）只有接口可用。 */
+  staticFiles?: StaticFiles;
 }
 
-/** 游戏服务器的 HTTP 接口：/stats 和 /api 下的注册、登录、退出。 */
+/** 游戏服务器的 HTTP 接口：/stats 和 /api 下的注册、登录、退出；配置了的话还提供客户端页面。 */
 export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: ServerResponse) => void {
   return (req, res) => {
     handle(deps, req, res).catch((err: unknown) => {
@@ -66,6 +70,7 @@ async function handle(deps: HttpDeps, req: IncomingMessage, res: ServerResponse)
     res.end();
     return;
   }
+  if (deps.staticFiles && serveStatic(deps.staticFiles, req, res)) return;
   res.writeHead(404);
   res.end();
 }
