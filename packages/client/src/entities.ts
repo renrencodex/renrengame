@@ -4,12 +4,18 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import type { EntityKind } from '@mmo/shared';
 
-/** 角色模型和动画。所有角色共用同一份几何体和动画数据。 */
-export interface CharacterAssets {
+/** 一个人物模型：骨骼、网格和它自带的动作。同一个模型的所有角色共用几何体和动作数据。 */
+export interface CharacterModel {
   scene: THREE.Object3D;
   animations: THREE.AnimationClip[];
-  /** 把模型缩放到统一身高所用的系数。 */
-  scale: number;
+  /** 站立时的身高。 */
+  height: number;
+}
+
+/** 游戏用到的全部人物模型。 */
+export interface CharacterAssets {
+  male: CharacterModel;
+  female: CharacterModel;
 }
 
 /** 创建一个角色的显示对象需要的信息。 */
@@ -21,32 +27,107 @@ export interface EntityViewInfo {
   maxHp: number;
 }
 
-const CHARACTER_HEIGHT = 1.8;
-/** 怪物比玩家矮一点，颜色固定为暗红色，远远就能和玩家区分开。 */
-const MONSTER_SCALE = 0.85;
-const MONSTER_COLOR = 0x8c2a24;
+/** 没有模型、用胶囊体代替时的身高。 */
+const FALLBACK_HEIGHT = 1.8;
 const LABEL_GAP = 0.45;
 const FADE_SECONDS = 0.15;
 const TURN_SHARPNESS = 14;
-/** 被打中时机身闪一下红色，持续这么久。 */
+/** 被打中时全身闪一下红色，持续这么久。 */
 const FLASH_SECONDS = 0.18;
 const FLASH_COLOR = new THREE.Color(0xff3020);
-/** 模型里可以换色的那个材质的名字（RobotExpressive 的机身）。 */
-const TINT_MATERIAL = 'Main';
 
-/** 加载角色模型。失败时返回 null，角色改用胶囊体显示。 */
-export async function loadCharacterAssets(
-  url = `${import.meta.env.BASE_URL}models/RobotExpressive.glb`,
-): Promise<CharacterAssets | null> {
+/** 模型里的动作名字（来自 Quaternius 的 Universal Animation Library）。 */
+const CLIP_IDLE = 'Idle_Loop';
+const CLIP_RUN = 'Jog_Fwd_Loop';
+const CLIP_PUNCHES = ['Punch_Jab', 'Punch_Cross'];
+const CLIP_DEATH = 'Death01';
+/** 跑步动作的播放速度：玩家跑得快，怪物慢一些，脚步和移动速度大致对得上。 */
+const PLAYER_RUN_RATE = 1.2;
+const MONSTER_RUN_RATE = 0.85;
+
+/** 模型里可以换色的材质的名字，见 tools/models/build.mjs。 */
+type TintSlot = 'Skin' | 'Shirt' | 'Pants' | 'Boots' | 'Hair';
+
+/** 一个角色的外观：用哪个模型、各部分什么颜色。 */
+interface Look {
+  model: 'male' | 'female';
+  size: number;
+  colors: Partial<Record<TintSlot, number>>;
+  /** 没有模型时胶囊体的颜色。 */
+  fallbackColor: number;
+  /** 不显示头发。 */
+  bald?: boolean;
+  /** 皮肤不用贴图，整个是 colors.Skin 这一个颜色。 */
+  plainSkin?: boolean;
+  /** 眼睛发光的颜色。 */
+  eyeGlow?: number;
+  runRate: number;
+}
+
+/** 肤色是乘在浅色皮肤贴图上的，所以第一个是原色。 */
+const SKIN_TONES = [0xffffff, 0xeccfb8, 0xc0906c, 0x8f6247];
+const HAIR_COLORS = [0x3a2a1c, 0x1c1815, 0x6b4a2a, 0xb08a4e, 0x7a3b1e];
+
+/** 怪物是行尸：灰绿色的皮肤、光头、发红的眼睛，比玩家高一点，远远就能和玩家区分开。 */
+const MONSTER_LOOK: Look = {
+  model: 'male',
+  size: 1.05,
+  colors: { Skin: 0x7f9f78, Shirt: 0x5a2420, Pants: 0x2c2a22, Boots: 0x15120f, Hair: 0x2a2a22 },
+  fallbackColor: 0x8c2a24,
+  bald: true,
+  plainSkin: true,
+  eyeGlow: 0xff2010,
+  runRate: MONSTER_RUN_RATE,
+};
+
+/** 玩家的外观由名字决定：同一个人每次上线、在每个人眼里都是同一个样子。 */
+function playerLook(name: string): Look {
+  let hash = 2166136261;
+  for (let i = 0; i < name.length; i++) hash = Math.imul(hash ^ name.charCodeAt(i), 16777619);
+  hash >>>= 0;
+  const shirt = new THREE.Color().setHSL(((hash >>> 8) % 360) / 360, 0.6, 0.5).getHex();
+  return {
+    model: hash & 1 ? 'female' : 'male',
+    size: 1,
+    colors: {
+      Skin: SKIN_TONES[(hash >>> 1) % SKIN_TONES.length],
+      Hair: HAIR_COLORS[(hash >>> 3) % HAIR_COLORS.length],
+      Shirt: shirt,
+    },
+    fallbackColor: shirt,
+    runRate: PLAYER_RUN_RATE,
+  };
+}
+
+/**
+ * 带骨骼的网格默认用第一次画出来时的姿势判断是否在屏幕内，倒地以后会被误判成看不见。
+ * 这里给一个足够大的范围，站着、出拳、躺下都在里面。
+ */
+const CULLING_SPHERE = new THREE.Sphere(new THREE.Vector3(0, 0.9, 0), 2.2);
+
+async function loadModel(loader: GLTFLoader, file: string): Promise<CharacterModel> {
+  const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/${file}`);
+  gltf.scene.updateMatrixWorld(true);
+  const height = new THREE.Box3().setFromObject(gltf.scene).max.y;
+  if (!(height > 0)) throw new Error(`${file} 没有高度`);
+  gltf.scene.traverse((child) => {
+    const mesh = child as THREE.SkinnedMesh;
+    if (mesh.isSkinnedMesh) mesh.boundingSphere = CULLING_SPHERE;
+  });
+  return { scene: gltf.scene, animations: gltf.animations, height };
+}
+
+/** 加载人物模型。失败时返回 null，角色改用胶囊体显示。 */
+export async function loadCharacterAssets(): Promise<CharacterAssets | null> {
   try {
-    const gltf = await new GLTFLoader().loadAsync(url);
-    gltf.scene.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(gltf.scene);
-    const height = box.max.y - box.min.y;
-    if (!(height > 0)) throw new Error('model has no height');
-    return { scene: gltf.scene, animations: gltf.animations, scale: CHARACTER_HEIGHT / height };
+    const loader = new GLTFLoader();
+    const [male, female] = await Promise.all([
+      loadModel(loader, 'human_male.glb'),
+      loadModel(loader, 'human_female.glb'),
+    ]);
+    return { male, female };
   } catch (err) {
-    console.warn('角色模型加载失败，改用胶囊体显示。', err);
+    console.warn('人物模型加载失败，改用胶囊体显示。', err);
     return null;
   }
 }
@@ -56,7 +137,7 @@ let noseGeometry: THREE.BoxGeometry | undefined;
 
 /**
  * 一个角色在场景里的样子：模型、动画、头顶的名字和血条。
- * 自己、其他玩家和怪物都用它；怪物用同一个模型，只是颜色和大小不同。
+ * 自己、其他玩家和怪物都用它，区别只在外观（见 Look）。
  */
 export class EntityView {
   readonly root = new THREE.Group();
@@ -65,12 +146,16 @@ export class EntityView {
   private readonly label: CSS2DObject;
   private readonly hpFill: HTMLElement;
   private readonly maxHp: number;
-  private readonly ownedMaterials: THREE.MeshStandardMaterial[] = [];
+  /** 这个角色自己的材质，以及各自平时的自发光颜色（受击闪烁之后要恢复）。 */
+  private readonly ownedMaterials: { material: THREE.MeshStandardMaterial; emissive: THREE.Color }[] = [];
   /** 没有模型时用的胶囊体，倒地时整体放平。 */
   private fallback: THREE.Group | null = null;
   private mixer: THREE.AnimationMixer | null = null;
   private idle: THREE.AnimationAction | null = null;
   private run: THREE.AnimationAction | null = null;
+  /** 出拳的几个动作轮流用。 */
+  private punches: THREE.AnimationAction[] = [];
+  private punchCount = 0;
   private punch: THREE.AnimationAction | null = null;
   private death: THREE.AnimationAction | null = null;
   private current: THREE.AnimationAction | null = null;
@@ -83,46 +168,47 @@ export class EntityView {
 
   constructor(info: EntityViewInfo, isSelf: boolean, assets: CharacterAssets | null) {
     const isMonster = info.kind === 'monster';
-    const size = isMonster ? MONSTER_SCALE : 1;
-    this.height = CHARACTER_HEIGHT * size;
+    const look = isMonster ? MONSTER_LOOK : playerLook(info.name);
+    const source = assets?.[look.model];
+    this.height = (source?.height ?? FALLBACK_HEIGHT) * look.size;
     this.maxHp = info.maxHp;
-    // 玩家按 id 分配一个固定的颜色，方便区分不同的人。
-    const color = isMonster
-      ? new THREE.Color(MONSTER_COLOR)
-      : new THREE.Color().setHSL((info.id * 0.618034) % 1, 0.65, 0.55);
 
-    if (assets) {
-      const model = cloneSkinned(assets.scene);
-      model.scale.setScalar(assets.scale * size);
+    if (source) {
+      const model = cloneSkinned(source.scene);
+      model.scale.setScalar(look.size);
+      // 每个角色用自己的一份材质，这样换色和受击闪烁互不影响；贴图仍然是共用的。
+      const copies = new Map<THREE.Material, THREE.MeshStandardMaterial>();
       model.traverse((child) => {
         const mesh = child as THREE.Mesh;
-        if (!mesh.isMesh) return;
+        if (!mesh.isMesh || Array.isArray(mesh.material)) return;
         mesh.castShadow = true;
-        const material = mesh.material;
-        if (!Array.isArray(material) && material.name === TINT_MATERIAL) {
-          const tinted = (material as THREE.MeshStandardMaterial).clone();
-          tinted.color.copy(color);
-          mesh.material = tinted;
-          this.ownedMaterials.push(tinted);
+        if (look.bald && mesh.name === 'Hair') mesh.visible = false;
+        let copy = copies.get(mesh.material);
+        if (!copy) {
+          copy = (mesh.material as THREE.MeshStandardMaterial).clone();
+          const color = look.colors[copy.name as TintSlot];
+          if (color !== undefined) copy.color.setHex(color);
+          if (look.plainSkin && copy.name === 'Skin') copy.map = null;
+          if (look.eyeGlow !== undefined && copy.name === 'Eyes') copy.emissive.setHex(look.eyeGlow);
+          copies.set(mesh.material, copy);
+          this.ownedMaterials.push({ material: copy, emissive: copy.emissive.clone() });
         }
+        mesh.material = copy;
       });
       this.root.add(model);
 
       const mixer = new THREE.AnimationMixer(model);
       this.mixer = mixer;
-      const clip = (...names: string[]): THREE.AnimationAction | null => {
-        for (const name of names) {
-          const found = THREE.AnimationClip.findByName(assets.animations, name);
-          if (found) return mixer.clipAction(found);
-        }
-        return null;
+      const clip = (name: string): THREE.AnimationAction | null => {
+        const found = THREE.AnimationClip.findByName(source.animations, name);
+        return found ? mixer.clipAction(found) : null;
       };
-      this.idle = clip('Idle');
-      // 怪物移动得慢，用走路的动作；玩家用跑步。
-      this.run = isMonster ? clip('Walking', 'Running') : clip('Running', 'Walking');
-      this.punch = clip('Punch');
-      this.death = clip('Death');
-      for (const once of [this.punch, this.death]) once?.setLoop(THREE.LoopOnce, 1);
+      this.idle = clip(CLIP_IDLE);
+      this.run = clip(CLIP_RUN);
+      this.run?.setEffectiveTimeScale(look.runRate);
+      this.punches = CLIP_PUNCHES.map(clip).filter((action) => action !== null);
+      this.death = clip(CLIP_DEATH);
+      for (const once of [...this.punches, this.death]) once?.setLoop(THREE.LoopOnce, 1);
       if (this.death) this.death.clampWhenFinished = true;
       mixer.addEventListener('finished', (ev) => {
         if (ev.action !== this.punch) return;
@@ -130,19 +216,19 @@ export class EntityView {
         this.refreshAction();
       });
     } else {
-      capsuleGeometry ??= new THREE.CapsuleGeometry(0.4, CHARACTER_HEIGHT - 0.8, 4, 12);
+      capsuleGeometry ??= new THREE.CapsuleGeometry(0.4, FALLBACK_HEIGHT - 0.8, 4, 12);
       noseGeometry ??= new THREE.BoxGeometry(0.2, 0.2, 0.3);
-      const material = new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
-      this.ownedMaterials.push(material);
+      const material = new THREE.MeshStandardMaterial({ color: look.fallbackColor, roughness: 0.6 });
+      this.ownedMaterials.push({ material, emissive: material.emissive.clone() });
       const body = new THREE.Mesh(capsuleGeometry, material);
-      body.position.y = CHARACTER_HEIGHT / 2;
+      body.position.y = FALLBACK_HEIGHT / 2;
       body.castShadow = true;
       // 朝前的小方块，用来看出朝向。
       const nose = new THREE.Mesh(noseGeometry, material);
-      nose.position.set(0, CHARACTER_HEIGHT * 0.75, 0.45);
+      nose.position.set(0, FALLBACK_HEIGHT * 0.75, 0.45);
       this.fallback = new THREE.Group();
       this.fallback.add(body, nose);
-      this.fallback.scale.setScalar(size);
+      this.fallback.scale.setScalar(look.size);
       this.root.add(this.fallback);
     }
 
@@ -211,8 +297,9 @@ export class EntityView {
     const dx = x - this.root.position.x;
     const dz = z - this.root.position.z;
     if (dx * dx + dz * dz > 1e-6) this.targetYaw = Math.atan2(dx, dz);
-    if (!this.punch || this.moving) return;
+    if (this.punches.length === 0 || this.moving) return;
     this.punching = true;
+    this.punch = this.punches[this.punchCount++ % this.punches.length];
     if (this.current === this.punch) this.punch.reset().play();
     else this.refreshAction();
   }
@@ -232,7 +319,7 @@ export class EntityView {
     if (this.flashLeft > 0) {
       this.flashLeft = Math.max(0, this.flashLeft - dt);
       const strength = this.flashLeft / FLASH_SECONDS;
-      for (const material of this.ownedMaterials) material.emissive.copy(FLASH_COLOR).multiplyScalar(strength);
+      for (const { material, emissive } of this.ownedMaterials) material.emissive.copy(emissive).lerp(FLASH_COLOR, strength);
     }
     this.mixer?.update(dt);
   }
@@ -244,7 +331,7 @@ export class EntityView {
       this.mixer.stopAllAction();
       this.mixer.uncacheRoot(this.mixer.getRoot());
     }
-    for (const material of this.ownedMaterials) material.dispose();
+    for (const { material } of this.ownedMaterials) material.dispose();
   }
 
   /** 按当前状态选出应该播放的动作，和正在播放的不同时渐变过去。 */

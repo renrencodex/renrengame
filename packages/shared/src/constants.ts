@@ -56,7 +56,7 @@ export const SAFE_ZONE_RADIUS = SPAWN_CLEAR_RADIUS;
 // ---- 怪物 ----
 
 export const MONSTER_COUNT = 120;
-export const MONSTER_NAME = '失控机器人';
+export const MONSTER_NAME = '行尸';
 export const MONSTER_MAX_HP = 60;
 export const MONSTER_ATTACK_DAMAGE = 8;
 export const MONSTER_ATTACK_INTERVAL_MS = 1500;

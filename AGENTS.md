@@ -87,7 +87,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 线上版本是 systemd 服务 `renrengame`，代码在 `/opt/renrengame/current`（某个提交的副本），配置在 `/etc/renrengame/env`，监听 `[::1]:5173`，玩家通过预览域名访问。工作区里的改动不会影响它，直到执行 `deploy/deploy.sh`。
 - **只有用户明确要求时才部署或重启线上服务。** 部署会让在线的玩家断线。
 - 线上占用了 5173 端口，`pnpm dev` 的客户端会自动换到下一个端口；游戏服务器的开发端口还是 8080。
-- 线上用的是 `mmo` 数据库和 Redis 的 0 号库，里面有真实玩家的账号。`packages/server/.env` 如果还指向它们，就不要启动开发服务器、不要对着它跑压测或测试脚本，先换成单独的开发库。
+- 线上用的是 `mmo` 数据库的 `public` schema 和 Redis 的 0 号库，里面有真实玩家的账号。这台机器上的 `packages/server/.env` 已经改成开发专用：同一个库的 `dev` schema（连接串末尾的 `options=-c%20search_path%3Ddev`）和 Redis 的 1 号库。启动开发服务器、跑压测或测试脚本之前确认 `.env` 仍然是这样；用 `psql` 手工查数据时注意自己连的是哪个 schema。
 - `deploy/deploy.sh` 生成 systemd 单元和配置文件；要改服务的运行方式就改脚本，不要手工改 `/etc/systemd/system/renrengame.service`，下次部署会被覆盖。
 
 ## 代码风格
@@ -104,4 +104,5 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 单测里要放障碍物时，在 `new World(map)` 之前改 `map.blocked`。`World` 在构造时为怪物复制了一份地图，之后再改，怪物看不到。
 - 数据库和 Redis 可能和别的项目共用同一个实例。只操作 `DATABASE_URL` 指向的库和带 `mmo:` 前缀的键，不要停止或重启这些服务，不要执行 `DROP`、`TRUNCATE`、`FLUSHALL`。
 - 测试时创建的账号用完要删掉。压测脚本的“机器人N”账号用的是公开的默认密码，只能出现在本地环境。
+- `packages/client/public/models/` 里的人物模型是 `tools/models/build.mjs` 生成的，不要手工改。客户端按名字找模型里的材质（`Skin`、`Shirt`、`Pants`、`Boots`、`Hair`、`Eyes`）、节点（`Hair`）和动作（`Idle_Loop`、`Jog_Fwd_Loop`、`Punch_Jab`、`Punch_Cross`、`Death01`），改脚本里的名字要同时改 `packages/client/src/entities.ts`。重新生成的步骤和素材的来源、授权见 README 的“素材”。
 - `packages/client/vite.config.ts` 的 `allowedHosts` 里放行了一个远程预览域名，换预览环境时要在这里加新的域名。

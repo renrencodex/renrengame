@@ -1,0 +1,16 @@
+{
+  "name": "mmo-model-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把下载的人物素材处理成游戏里用的模型文件。只在更换素材时用，不属于 pnpm 工作区。",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "4.5.1",
+    "@gltf-transform/extensions": "4.5.1",
+    "@gltf-transform/functions": "4.5.1",
+    "sharp": "0.35.5"
+  }
+}
