@@ -450,7 +450,7 @@ export class Game {
     else if (ev.key === 'm' || ev.key === 'M') this.hud.toggleSound();
     else if (ev.key === 'Escape') {
       this.headingToShop = false;
-      this.hud.closeShop();
+      this.hud.closePanels();
     }
   };
 

@@ -1,10 +1,12 @@
 import { attackDamage, ITEM_IDS, ITEMS } from '@mmo/shared';
 import type { Inventory, ItemId } from '@mmo/shared';
+import { uiIcon } from './ui';
 
-/** 一个物品的小图标，样式在 style.css 的 .item-icon 里。 */
+/** 一个物品的小图标，图形来自本地 SVG 精灵图。 */
 export function itemIcon(item: ItemId): HTMLElement {
   const icon = document.createElement('span');
   icon.className = `item-icon ${item}`;
+  icon.append(uiIcon(item));
   return icon;
 }
 
@@ -18,13 +20,33 @@ export class BagPanel {
   onUse: ((item: ItemId) => void) | null = null;
   onEquip: ((item: ItemId) => void) | null = null;
   onUnequip: (() => void) | null = null;
+  onClose: (() => void) | null = null;
   private readonly weaponSlot = document.createElement('button');
   private readonly attack = document.createElement('div');
   private readonly list = document.createElement('div');
 
   constructor() {
-    this.element.className = 'bag';
+    this.element.className = 'bag game-panel';
     this.element.hidden = true;
+    this.element.setAttribute('role', 'dialog');
+    this.element.setAttribute('aria-label', '背包');
+
+    const header = document.createElement('div');
+    header.className = 'panel-header';
+    const heading = document.createElement('h2');
+    heading.className = 'panel-title';
+    heading.append(uiIcon('bag'), text('panel-title-text', '冒险者行囊'));
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'panel-close';
+    close.title = '关上背包（B 键）';
+    close.setAttribute('aria-label', '关上背包');
+    close.append(uiIcon('close'));
+    close.addEventListener('click', () => {
+      close.blur();
+      this.onClose?.();
+    });
+    header.append(heading, close);
 
     this.weaponSlot.type = 'button';
     this.weaponSlot.addEventListener('click', () => {
@@ -34,7 +56,7 @@ export class BagPanel {
     this.attack.className = 'bag-attack';
     this.list.className = 'bag-list';
 
-    this.element.append(title('武器'), this.weaponSlot, this.attack, title('背包'), this.list);
+    this.element.append(header, sectionTitle('武器栏', this.attack), this.weaponSlot, sectionTitle('随身物品'), this.list);
     this.setInventory({}, null);
   }
 
@@ -46,10 +68,19 @@ export class BagPanel {
     this.element.hidden = !this.element.hidden;
   }
 
+  show(): void {
+    this.element.hidden = false;
+  }
+
+  hide(): void {
+    this.element.hidden = true;
+  }
+
   setInventory(items: Inventory, weapon: ItemId | null): void {
     this.weaponSlot.className = weapon ? 'bag-row weapon-slot' : 'bag-row weapon-slot empty';
     this.weaponSlot.disabled = weapon === null;
     this.weaponSlot.title = weapon ? '点击收回背包' : '';
+    this.weaponSlot.setAttribute('aria-label', weapon ? `卸下${ITEMS[weapon].name}` : '武器栏为空');
     if (weapon) {
       const bonus = ITEMS[weapon].weapon?.damage ?? 0;
       this.weaponSlot.replaceChildren(
@@ -83,6 +114,7 @@ export class BagPanel {
     if (action) {
       const button = row as HTMLButtonElement;
       button.type = 'button';
+      button.setAttribute('aria-label', `${action}${def.name}`);
       button.append(text('bag-action', action));
       button.addEventListener('click', () => {
         button.blur();
@@ -94,8 +126,12 @@ export class BagPanel {
   }
 }
 
-function title(label: string): HTMLElement {
-  return text('bag-title', label);
+function sectionTitle(label: string, trailing?: HTMLElement): HTMLElement {
+  const title = document.createElement('div');
+  title.className = 'bag-title';
+  title.append(text('bag-title-text', label));
+  if (trailing) title.append(trailing);
+  return title;
 }
 
 function text(className: string, content: string): HTMLElement {

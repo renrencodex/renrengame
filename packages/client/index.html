@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>2.5D MMO 原型</title>
+    <title>人人大陆</title>
   </head>
   <body>
     <div id="app"></div>
@@ -11,21 +11,42 @@
     <div id="banner" hidden></div>
     <div id="overlay">
       <form id="auth-form" class="parchment-scroll">
-        <h1>2.5D MMO 原型</h1>
+        <div class="auth-brand">
+          <div class="auth-emblem" aria-hidden="true">
+            <svg viewBox="0 0 64 64"><use href="/ui/icons.svg#crest"></use></svg>
+          </div>
+          <div>
+            <p class="auth-kicker">冒险者通行证</p>
+            <h1>人人大陆</h1>
+            <p class="auth-subtitle">踏入荒野，书写你的传说</p>
+          </div>
+        </div>
         <div id="login-fields">
-          <input id="username-input" type="text" maxlength="16" autocomplete="username" placeholder="账号名（2–16 个字符）" />
-          <input
-            id="password-input"
-            type="password"
-            maxlength="72"
-            autocomplete="current-password"
-            placeholder="密码（至少 6 位）"
-          />
+          <label class="auth-field">
+            <span>账号名</span>
+            <input id="username-input" type="text" maxlength="16" autocomplete="username" placeholder="2–16 个字符" />
+          </label>
+          <label class="auth-field">
+            <span>密码</span>
+            <input
+              id="password-input"
+              type="password"
+              maxlength="72"
+              autocomplete="current-password"
+              placeholder="至少 6 位"
+            />
+          </label>
         </div>
         <p id="welcome-back" hidden></p>
         <button id="primary-button" type="submit">登录</button>
         <button id="secondary-button" type="button">注册新账号</button>
-        <p id="overlay-message"></p>
+        <p id="overlay-message" role="status" aria-live="polite"></p>
+        <details id="controls-guide">
+          <summary>操作指南</summary>
+          <p>
+            点击或按住地面移动，点击怪物攻击；靠近掉落物会自动拾取。用药水恢复生命，在背包中装备武器，前往出生点旁的商人买卖物品。滚轮或双指捏合可调节镜头。
+          </p>
+        </details>
       </form>
     </div>
     <script type="module" src="/src/main.ts"></script>

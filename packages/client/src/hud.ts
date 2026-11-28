@@ -2,6 +2,7 @@ import { ITEM_IDS, ITEMS, POTION_COOLDOWN_MS } from '@mmo/shared';
 import type { Inventory, ItemId } from '@mmo/shared';
 import { BagPanel, itemIcon } from './bag';
 import { ShopPanel } from './shop';
+import { uiIcon } from './ui';
 
 export interface HudData {
   rtt: number;
@@ -17,8 +18,8 @@ export interface HudData {
 const UPDATE_MS = 500;
 
 /**
- * 左上角的状态栏：自己的血条、金币、药水、背包，以及延迟、视野内数量、坐标、帧率；还有屏幕中间的提示。
- * 药水是一个按钮，点它和按数字键 1 一样；背包按钮（或者 B 键）打开下面的背包面板；音效按钮（或者 M 键）开关声音。
+ * 游戏 HUD：左上角是生命和金币，底部是药水、背包、音效快捷栏，左下角是诊断信息。
+ * 药水按钮和数字键 1 一样；背包按钮（或者 B 键）打开中央面板；音效按钮（或者 M 键）开关声音。
  * 所有操作都有按钮，没有键盘的手机也能用；按钮在触摸屏上的大小由 style.css 里的 (pointer: coarse) 决定。
  * 商店面板也在这里，什么时候打开、关上由 Game 决定（走到商人跟前、走远了）。
  */
@@ -38,6 +39,7 @@ export class Hud {
   onPanelSound: (() => void) | null = null;
   private readonly shop = new ShopPanel();
   private readonly status = document.createElement('div');
+  private readonly playerName = document.createElement('span');
   private readonly hpFill = document.createElement('div');
   private readonly hpText = document.createElement('span');
   private readonly gold = document.createElement('span');
@@ -52,6 +54,7 @@ export class Hud {
   private lastUpdate = 0;
   private bannerText = '';
   private potions = 0;
+  private hasIdleWeapon = false;
   /** 药水冷却结束的本地时间。 */
   private potionReadyAt = 0;
   private cooldownShown = -1;
@@ -61,26 +64,53 @@ export class Hud {
     private readonly banner: HTMLElement,
   ) {
     this.status.className = 'hud-status';
-    const bar = document.createElement('div');
-    bar.className = 'hud-hp';
-    this.hpFill.className = 'hud-hp-fill';
-    this.hpText.className = 'hud-hp-text';
-    bar.append(this.hpFill, this.hpText);
+    this.status.setAttribute('aria-label', '连接与性能信息');
 
-    const items = document.createElement('div');
-    items.className = 'hud-items';
+    const vitals = document.createElement('section');
+    vitals.className = 'hud-vitals';
+    vitals.setAttribute('aria-label', '角色状态');
+    const crest = document.createElement('div');
+    crest.className = 'hud-crest';
+    crest.append(uiIcon('crest'));
+
+    const vitalContent = document.createElement('div');
+    vitalContent.className = 'hud-vital-content';
+    const identity = document.createElement('div');
+    identity.className = 'hud-identity';
+    this.playerName.className = 'hud-player-name';
+
     const goldBox = document.createElement('div');
     goldBox.className = 'hud-gold';
     goldBox.title = ITEMS.gold.name;
     this.gold.className = 'hud-gold-count';
     goldBox.append(itemIcon('gold'), this.gold);
+    identity.append(this.playerName, goldBox);
+
+    const bar = document.createElement('div');
+    bar.className = 'hud-hp';
+    this.hpFill.className = 'hud-hp-fill';
+    this.hpText.className = 'hud-hp-text';
+    bar.append(this.hpFill, this.hpText);
+    vitalContent.append(identity, bar);
+    vitals.append(crest, vitalContent);
+
+    const items = document.createElement('div');
+    items.className = 'hud-actions';
+    items.setAttribute('role', 'toolbar');
+    items.setAttribute('aria-label', '快捷操作');
 
     this.potionButton.type = 'button';
     this.potionButton.className = 'hud-button hud-potion';
     this.potionButton.title = '喝一瓶治疗药水（数字键 1）';
     this.potionCount.className = 'hud-potion-count';
     this.potionCooldown.className = 'hud-potion-cooldown';
-    this.potionButton.append(this.potionCooldown, itemIcon('potion'), this.potionCount, keyHint('1'));
+    this.potionButton.append(
+      this.potionCooldown,
+      itemIcon('potion'),
+      text('hud-action-label', '药水'),
+      this.potionCount,
+      keyHint('1'),
+    );
     this.potionButton.addEventListener('click', () => {
       // 不留焦点，免得之后按空格、回车又触发一次。
       this.potionButton.blur();
@@ -90,9 +120,8 @@ export class Hud {
     this.bagButton.type = 'button';
     this.bagButton.className = 'hud-button hud-bag';
     this.bagButton.title = '打开或关上背包（B 键）';
-    const bagLabel = document.createElement('span');
-    bagLabel.textContent = '背包';
-    this.bagButton.append(bagLabel, keyHint('B'));
+    this.bagButton.setAttribute('aria-expanded', 'false');
+    this.bagButton.append(uiIcon('bag'), text('hud-action-label', '背包'), keyHint('B'));
     this.bagButton.addEventListener('click', () => {
       this.bagButton.blur();
       this.toggleBag();
@@ -100,29 +129,43 @@ export class Hud {
 
     this.soundButton.type = 'button';
     this.soundButton.className = 'hud-button hud-sound';
-    this.soundButton.append(this.soundLabel, keyHint('M'));
+    this.soundLabel.className = 'hud-action-label';
+    this.soundButton.append(
+      uiIcon('sound', 'sound-on-icon'),
+      uiIcon('mute', 'sound-off-icon'),
+      this.soundLabel,
+      keyHint('M'),
+    );
     this.soundButton.addEventListener('click', () => {
       this.soundButton.blur();
       this.toggleSound();
     });
     this.setSoundOn(true);
-    items.append(goldBox, this.potionButton, this.bagButton, this.soundButton);
+    items.append(this.potionButton, this.bagButton, this.soundButton);
 
     this.bag.onUse = (item) => {
       if (item === 'potion') this.onUsePotion?.();
     };
     this.bag.onEquip = (item) => this.onEquip?.(item);
     this.bag.onUnequip = () => this.onUnequip?.();
+    this.bag.onClose = () => this.closeBag();
     this.shop.onBuy = (item, count) => this.onBuy?.(item, count);
     this.shop.onSell = (item, count) => this.onSell?.(item, count);
     this.shop.onClose = () => this.closeShop();
 
-    // 两个面板放在同一个容器里：平时上下排，手机横屏时屏幕不够高，改成左右排（见 style.css）。
+    // 两个面板放在同一个舞台里：桌面并排，窄屏纵向滚动，手机横屏紧凑并排。
+    const panelLayer = document.createElement('div');
+    panelLayer.className = 'hud-panel-layer';
     const panels = document.createElement('div');
     panels.className = 'hud-panels';
     panels.append(this.bag.element, this.shop.element);
+    panelLayer.append(panels);
 
-    el.replaceChildren(bar, items, panels, this.status);
+    this.banner.setAttribute('role', 'status');
+    this.banner.setAttribute('aria-live', 'polite');
+    el.replaceChildren(vitals, items, panelLayer, this.status);
+    this.setPlayerName('冒险者');
+    this.setHp(0, 100);
     this.setInventory({}, null);
   }
 
@@ -131,11 +174,19 @@ export class Hud {
    * 内容比屏幕高时可以上下滑。
    */
   private syncPanels(): void {
-    this.el.classList.toggle('panel-open', this.bag.open || this.shop.open);
+    const anyOpen = this.bag.open || this.shop.open;
+    this.el.classList.toggle('panel-open', anyOpen);
+    this.bagButton.classList.toggle('open', this.bag.open);
+    this.bagButton.classList.toggle('notice', this.hasIdleWeapon && !this.bag.open);
+    this.bagButton.setAttribute('aria-expanded', String(this.bag.open));
   }
 
   show(): void {
     this.el.hidden = false;
+  }
+
+  setPlayerName(name: string): void {
+    this.playerName.textContent = name;
   }
 
   setHp(hp: number, maxHp: number): void {
@@ -150,17 +201,23 @@ export class Hud {
     this.potions = items.potion ?? 0;
     this.potionCount.textContent = `×${this.potions}`;
     this.potionButton.classList.toggle('empty', this.potions === 0);
+    this.potionButton.setAttribute('aria-label', `使用治疗药水，剩余 ${this.potions} 瓶`);
     this.bag.setInventory(items, weapon);
     this.shop.setInventory(items);
     // 背包里有武器、手里却空着的时候，让背包按钮亮起来提醒一下。
-    const idleWeapon = weapon === null && ITEM_IDS.some((id) => ITEMS[id].weapon && (items[id] ?? 0) > 0);
-    this.bagButton.classList.toggle('notice', idleWeapon && !this.bag.open);
+    this.hasIdleWeapon = weapon === null && ITEM_IDS.some((id) => ITEMS[id].weapon && (items[id] ?? 0) > 0);
+    this.syncPanels();
   }
 
   toggleBag(): void {
     this.bag.toggle();
-    this.bagButton.classList.toggle('open', this.bag.open);
-    if (this.bag.open) this.bagButton.classList.remove('notice');
+    this.syncPanels();
+    this.onPanelSound?.();
+  }
+
+  closeBag(): void {
+    if (!this.bag.open) return;
+    this.bag.hide();
     this.syncPanels();
     this.onPanelSound?.();
   }
@@ -183,6 +240,14 @@ export class Hud {
     this.onPanelSound?.();
   }
 
+  closePanels(): void {
+    if (!this.bag.open && !this.shop.open) return;
+    this.bag.hide();
+    this.shop.hide();
+    this.syncPanels();
+    this.onPanelSound?.();
+  }
+
   toggleSound(): void {
     this.onToggleSound?.();
   }
@@ -192,6 +257,8 @@ export class Hud {
     this.soundLabel.textContent = on ? '音效' : '静音';
     this.soundButton.classList.toggle('off', !on);
     this.soundButton.title = on ? '关掉声音（M 键）' : '打开声音（M 键）';
+    this.soundButton.setAttribute('aria-label', this.soundButton.title);
+    this.soundButton.setAttribute('aria-pressed', String(on));
   }
 
   /** 药水进入冷却，到 readyAt（本地时间）结束。 */
@@ -237,4 +304,11 @@ function keyHint(key: string): HTMLElement {
   hint.className = 'hud-key';
   hint.textContent = key;
   return hint;
+}
+
+function text(className: string, content: string): HTMLElement {
+  const el = document.createElement('span');
+  el.className = className;
+  el.textContent = content;
+  return el;
 }

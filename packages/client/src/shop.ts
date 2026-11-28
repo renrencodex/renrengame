@@ -1,6 +1,7 @@
 import { buyProblem, ITEM_IDS, ITEMS, maxBuy, MERCHANT_NAME, POTION_HEAL, sellProblem, SHOP_GOODS } from '@mmo/shared';
 import type { Inventory, ItemId, TradeProblem } from '@mmo/shared';
 import { itemIcon } from './bag';
+import { uiIcon } from './ui';
 
 /** 按住 Shift 点击、或者打开了“一次 5 个”时，一次买卖这么多个（不够就有多少算多少）。 */
 const BULK_COUNT = 5;
@@ -48,11 +49,16 @@ export class ShopPanel {
   private bulk = false;
 
   constructor() {
-    this.element.className = 'shop';
+    this.element.className = 'shop game-panel';
     this.element.hidden = true;
+    this.element.setAttribute('role', 'dialog');
+    this.element.setAttribute('aria-label', '商店');
 
     const header = document.createElement('div');
-    header.className = 'shop-header';
+    header.className = 'panel-header shop-header';
+    const heading = document.createElement('h2');
+    heading.className = 'panel-title shop-title';
+    heading.append(uiIcon('shop'), text('panel-title-text', MERCHANT_NAME));
     this.bulkButton.type = 'button';
     this.bulkButton.className = 'shop-bulk';
     this.bulkButton.addEventListener('click', () => {
@@ -61,11 +67,15 @@ export class ShopPanel {
     });
     const close = document.createElement('button');
     close.type = 'button';
-    close.className = 'shop-close';
+    close.className = 'panel-close shop-close';
     close.title = '关上商店（Esc 键）';
-    close.textContent = '×';
-    close.addEventListener('click', () => this.onClose?.());
-    header.append(text('shop-title', MERCHANT_NAME), this.bulkButton, close);
+    close.setAttribute('aria-label', '关上商店');
+    close.append(uiIcon('close'));
+    close.addEventListener('click', () => {
+      close.blur();
+      this.onClose?.();
+    });
+    header.append(heading, this.bulkButton, close);
     this.setBulk(false);
 
     const buyList = document.createElement('div');
@@ -99,10 +109,8 @@ export class ShopPanel {
 
     this.element.append(
       header,
-      text('bag-title', '买'),
-      buyList,
-      text('bag-title', '卖'),
-      sellList,
+      section('商人出售', buyList),
+      section('商人收购', sellList),
       text('shop-hint', `按住 Shift 点击，一次 ${BULK_COUNT} 个`),
     );
     this.setInventory({});
@@ -126,6 +134,7 @@ export class ShopPanel {
     this.bulk = on;
     this.bulkButton.textContent = `一次 ${on ? BULK_COUNT : 1} 个`;
     this.bulkButton.classList.toggle('on', on);
+    this.bulkButton.setAttribute('aria-pressed', String(on));
     this.bulkButton.title = on
       ? `现在点一下买卖 ${BULK_COUNT} 个，再点这里改回 1 个`
       : `点亮之后，点一下买卖 ${BULK_COUNT} 个`;
@@ -157,6 +166,7 @@ export class ShopPanel {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `bag-row shop-row ${kind} ${id}`;
+    button.setAttribute('aria-label', `${action}${ITEMS[id].name}，价格 ${price} 金币`);
     const count = text('bag-count', '');
     const priceBox = document.createElement('span');
     priceBox.className = 'shop-price';
@@ -169,6 +179,16 @@ export class ShopPanel {
     button.append(priceBox, actionLabel);
     return { button, count, action: actionLabel };
   }
+}
+
+function section(label: string, content: HTMLElement): HTMLElement {
+  const container = document.createElement('section');
+  container.className = 'shop-section';
+  const title = document.createElement('h3');
+  title.className = 'bag-title';
+  title.textContent = label;
+  container.append(title, content);
+  return container;
 }
 
 function text(className: string, content: string): HTMLElement {
