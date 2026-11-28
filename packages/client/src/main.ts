@@ -13,6 +13,7 @@ import {
 } from '@mmo/shared';
 import type { AuthSuccess } from '@mmo/shared';
 import { clearSession, loadSession, login, logout, register, saveSession } from './api';
+import { loadItemAssets } from './drops';
 import { loadCharacterAssets } from './entities';
 import { Game } from './game';
 import { Hud } from './hud';
@@ -26,9 +27,12 @@ import { Net } from './net';
  */
 type View = 'login' | 'resume' | 'ended';
 
+const CONTROLS =
+  '点击地面移动，按住可以连续移动；点击怪物攻击；怪物掉的东西走到旁边就会捡起来；按 1 喝治疗药水；滚轮缩放。';
+
 const HINTS: Record<View, string> = {
-  login: '登录或注册后进入世界。点击地面移动，按住可以连续移动；点击怪物攻击；滚轮缩放。',
-  resume: '点击地面移动，按住可以连续移动；点击怪物攻击；滚轮缩放。',
+  login: `登录或注册后进入世界。${CONTROLS}`,
+  resume: CONTROLS,
   ended: '',
 };
 
@@ -47,7 +51,13 @@ const hud = new Hud(document.getElementById('hud') as HTMLElement, document.getE
 let view: View = 'login';
 let busy = false;
 let session: AuthSuccess | null = loadSession();
-let assetsPromise: ReturnType<typeof loadCharacterAssets> | null = null;
+let assetsPromise: ReturnType<typeof loadAssets> | null = null;
+
+/** 人物和物品的模型一起加载。哪个加载失败，哪个就用简单的形状代替，不影响进入游戏。 */
+async function loadAssets() {
+  const [characters, items] = await Promise.all([loadCharacterAssets(), loadItemAssets()]);
+  return { characters, items };
+}
 
 show(session ? 'resume' : 'login');
 
@@ -127,8 +137,8 @@ async function enterWorld(): Promise<void> {
   if (!session) return;
   const token = session.token;
   setBusy(true);
-  message.textContent = '正在加载角色模型…';
-  assetsPromise ??= loadCharacterAssets();
+  message.textContent = '正在加载模型…';
+  assetsPromise ??= loadAssets();
   const assets = await assetsPromise;
 
   message.textContent = '正在连接服务器…';
@@ -142,7 +152,7 @@ async function enterWorld(): Promise<void> {
       return;
     }
     try {
-      game = new Game(app, net, hud, assets, msg.selfId, msg.seed);
+      game = new Game(app, net, hud, assets.characters, assets.items, msg.selfId, msg.seed);
       overlay.hidden = true;
     } catch (err) {
       console.error(err);

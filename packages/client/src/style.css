@@ -86,6 +86,52 @@ body {
   color: #ff6a5a;
 }
 
+.heal-text,
+.loot-text {
+  font-size: 15px;
+  font-weight: 700;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.9),
+    0 0 4px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.heal-text {
+  color: #7dee6a;
+}
+
+.loot-text {
+  color: #fff;
+}
+
+.loot-text.gold {
+  color: #ffd95a;
+}
+
+.loot-text.potion {
+  color: #ff9a9a;
+}
+
+.drop-label {
+  padding: 0 5px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font-size: 11px;
+  line-height: 15px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.drop-label.gold {
+  color: #ffd95a;
+}
+
+.drop-label.potion {
+  color: #ffb3b3;
+}
+
 #hud {
   position: fixed;
   top: 10px;
@@ -132,6 +178,113 @@ body {
   line-height: 16px;
   text-align: center;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.hud-items {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hud-gold,
+.hud-potion {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.hud-gold-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff3b0, #f0b429 55%, #a86a00);
+  box-shadow: 0 0 0 1px rgba(90, 50, 0, 0.8);
+}
+
+.hud-gold-count {
+  color: #ffd95a;
+  font-weight: 600;
+}
+
+/* 整个状态栏不拦截鼠标，只有这个按钮可以点。 */
+.hud-potion {
+  position: relative;
+  overflow: hidden;
+  border: 0;
+  outline: 1px solid rgba(255, 140, 140, 0.45);
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.hud-potion:hover {
+  background: rgba(60, 10, 10, 0.6);
+}
+
+.hud-potion.empty,
+.hud-potion.cooling {
+  cursor: default;
+}
+
+.hud-potion.empty {
+  outline-color: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.hud-potion.empty .hud-potion-icon {
+  opacity: 0.35;
+}
+
+/* 一个小药瓶：圆肚子加上一截瓶颈。 */
+.hud-potion-icon {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffc4c4, #e03a3a 55%, #8a1414);
+}
+
+.hud-potion-icon::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 4px;
+  width: 4px;
+  height: 6px;
+  border-radius: 1px;
+  background: #d9c9a8;
+}
+
+.hud-potion-count {
+  font-weight: 600;
+}
+
+.hud-key {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+/* 冷却时从下往上盖住按钮的一层，高度由脚本每帧更新。 */
+.hud-potion-cooldown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 0;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
 }
 
 #banner {

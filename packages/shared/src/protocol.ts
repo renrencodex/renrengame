@@ -1,6 +1,11 @@
 import { MAX_NAME_LENGTH, MAX_TOKEN_LENGTH } from './constants';
+import { isItemId } from './items';
+import type { Inventory, ItemId } from './items';
 
-export type EntityKind = 'player' | 'monster';
+/** 会走会打的实体。 */
+export type CharacterKind = 'player' | 'monster';
+/** drop 是掉在地上的物品。 */
+export type EntityKind = CharacterKind | 'drop';
 
 /** 实体在快照里的状态。 */
 export const STATE_IDLE = 0;
@@ -8,10 +13,10 @@ export const STATE_MOVING = 1;
 export const STATE_DEAD = 2;
 export type EntityState = typeof STATE_IDLE | typeof STATE_MOVING | typeof STATE_DEAD;
 
-/** 实体进入视野时下发的完整信息。 */
-export interface EntityInfo {
+/** 玩家或怪物进入视野时下发的完整信息。 */
+export interface CharacterInfo {
   id: number;
-  kind: EntityKind;
+  kind: CharacterKind;
   name: string;
   x: number;
   z: number;
@@ -20,7 +25,20 @@ export interface EntityInfo {
   maxHp: number;
 }
 
-/** 快照里的一个实体，用元组以减小体积。 */
+/** 地上的物品进入视野时下发的信息。它不会动，所以不出现在快照里，消失时和其他实体一样收到 leave。 */
+export interface DropInfo {
+  id: number;
+  kind: 'drop';
+  x: number;
+  z: number;
+  item: ItemId;
+  count: number;
+}
+
+/** 实体进入视野时下发的完整信息。 */
+export type EntityInfo = CharacterInfo | DropInfo;
+
+/** 快照里的一个玩家或怪物，用元组以减小体积。 */
 export type SnapEntity = [id: number, x: number, z: number, state: EntityState, hp: number];
 
 export type ClientMsg =
@@ -29,6 +47,8 @@ export type ClientMsg =
   | { t: 'moveTo'; x: number; z: number }
   /** 选中一个怪物作为攻击目标。id 为 0 表示取消目标。 */
   | { t: 'target'; id: number }
+  /** 使用背包里的一个物品。 */
+  | { t: 'use'; item: ItemId }
   | { t: 'ping'; c: number };
 
 export type ServerMsg =
@@ -38,6 +58,10 @@ export type ServerMsg =
   | { t: 'snap'; time: number; entities: SnapEntity[] }
   /** 一次命中。只用来播放动作和显示伤害数字，血量以快照为准。 */
   | { t: 'hit'; from: number; to: number; damage: number }
+  /** 一次回血（喝药水）。和 hit 一样只用来显示数字，血量以快照为准。 */
+  | { t: 'heal'; id: number; amount: number }
+  /** 自己背包的全部内容。进入世界时下发一次，之后每次变化再下发。 */
+  | { t: 'inv'; items: Inventory }
   | { t: 'pong'; c: number; s: number };
 
 // 编解码都收在这里，以后换成二进制协议只需要改这个文件。
@@ -65,6 +89,8 @@ export function decodeClientMsg(raw: string): ClientMsg | null {
       return isFiniteNumber(m.x) && isFiniteNumber(m.z) ? { t: 'moveTo', x: m.x, z: m.z } : null;
     case 'target':
       return Number.isSafeInteger(m.id) && (m.id as number) >= 0 ? { t: 'target', id: m.id as number } : null;
+    case 'use':
+      return isItemId(m.item) ? { t: 'use', item: m.item } : null;
     case 'ping':
       return isFiniteNumber(m.c) ? { t: 'ping', c: m.c } : null;
     default:

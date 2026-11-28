@@ -42,13 +42,15 @@ function runTicks(world: World, n: number, startTime = 0): number {
 }
 
 describe('World', () => {
-  it('加入时先收到 welcome，再收到包含自己的 enter', () => {
+  it('加入时先收到 welcome，再收到背包和包含自己的 enter', () => {
     const world = new World(emptyMap(256, 4242));
     const conn = new FakeConn();
     const id = world.join('  小明 ', conn, 1000, { x: 100, z: 100 });
 
-    const [welcome, enter] = conn.take();
+    const [welcome, inv, enter, ...rest] = conn.take();
+    expect(rest).toEqual([]);
     expect(welcome).toEqual({ t: 'welcome', selfId: id, seed: 4242, serverTime: 1000 });
+    expect(inv).toEqual({ t: 'inv', items: {} });
     expect(enter).toEqual({
       t: 'enter',
       entities: [{ id, kind: 'player', name: '小明', x: 100, z: 100, state: 0, hp: 100, maxHp: 100 }],

@@ -1,5 +1,6 @@
 export * from './account';
 export * from './constants';
+export * from './items';
 export * from './map';
 export * from './movement';
 export * from './pathfinding';

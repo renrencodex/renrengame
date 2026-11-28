@@ -10,6 +10,7 @@ import {
   generateMap,
   isWalkable,
   MONSTER_COUNT,
+  sameInventory,
   TICK_MS,
   WS_PATH,
 } from '@mmo/shared';
@@ -32,14 +33,14 @@ const MAX_PAYLOAD_BYTES = 1024;
 /** 每个连接每秒允许的消息数，以及允许的突发量。 */
 const MESSAGES_PER_SECOND = 30;
 const MESSAGE_BURST = 40;
-/** 发送缓冲超过这个值时先丢快照和命中消息，超过上限时断开连接。 */
+/** 发送缓冲超过这个值时先丢快照、命中和回血消息，超过上限时断开连接。 */
 const SNAPSHOT_DROP_BYTES = 1 << 20;
 const DISCONNECT_BYTES = 8 << 20;
 /** 落后太多时一次最多补几个 tick，再多就直接跳过。 */
 const MAX_CATCHUP_TICKS = 5;
 const STATS_WINDOW_MS = 5000;
 const HEARTBEAT_MS = 30000;
-/** 每隔这么久把在线玩家的位置和血量写进数据库。 */
+/** 每隔这么久把在线玩家的位置、血量和背包写进数据库。 */
 const AUTOSAVE_MS = 30000;
 /** 有玩家下线后，等这么久再写库，让短时间内的多次下线合成一批。 */
 const LEAVE_FLUSH_DELAY_MS = 1000;
@@ -66,7 +67,11 @@ interface OnlinePlayer {
 
 /** 玩家当前要存档的状态。死亡状态存成 0 血，下次上线时在出生点满血复活。 */
 function toSave(state: PlayerState): CharacterState {
-  return { x: state.x, z: state.z, hp: state.dead ? 0 : state.hp };
+  return { x: state.x, z: state.z, hp: state.dead ? 0 : state.hp, items: state.items };
+}
+
+function sameSave(a: CharacterState | SavedCharacter, b: CharacterState): boolean {
+  return a.x === b.x && a.z === b.z && a.hp === b.hp && sameInventory(a.items, b.items);
 }
 
 async function main(): Promise<void> {
@@ -102,9 +107,9 @@ async function main(): Promise<void> {
           ws.terminate();
           return;
         }
-        // 快照可以丢，下一个快照会补上；命中消息只用来播放动作和飘字，血量以快照为准，也可以丢。
-        // enter 和 leave 不能丢。
-        if ((msg.t === 'snap' || msg.t === 'hit') && buffered > SNAPSHOT_DROP_BYTES) return;
+        // 快照可以丢，下一个快照会补上；命中和回血消息只用来播放动作和飘字，血量以快照为准，也可以丢。
+        // enter、leave 和背包不能丢。
+        if ((msg.t === 'snap' || msg.t === 'hit' || msg.t === 'heal') && buffered > SNAPSHOT_DROP_BYTES) return;
         let data = encoded.get(msg);
         if (data === undefined) {
           data = encode(msg);
@@ -115,7 +120,7 @@ async function main(): Promise<void> {
     };
   }
 
-  // ---- 角色位置和血量的保存 ----
+  // ---- 角色位置、血量和背包的保存 ----
 
   let leaveFlushTimer: NodeJS.Timeout | undefined;
 
@@ -125,7 +130,7 @@ async function main(): Promise<void> {
     });
   }
 
-  /** 把玩家移出世界，并记下位置和血量等待写库。 */
+  /** 把玩家移出世界，并记下位置、血量和背包等待写库。 */
   function removeFromWorld(player: OnlinePlayer): void {
     const state = world.getPlayer(player.playerId);
     world.leave(player.playerId);
@@ -145,8 +150,7 @@ async function main(): Promise<void> {
       const state = world.getPlayer(player.playerId);
       if (!state) continue;
       const save = toSave(state);
-      const last = player.lastMarked;
-      if (last && last.x === save.x && last.z === save.z && last.hp === save.hp) continue;
+      if (player.lastMarked && sameSave(player.lastMarked, save)) continue;
       player.lastMarked = save;
       characters.markDirty(player.characterId, save);
     }
@@ -182,7 +186,7 @@ async function main(): Promise<void> {
 
     const existing = online.get(session.accountId);
     if (existing) {
-      // 顶号：新连接接着旧连接当前的位置和血量继续。
+      // 顶号：新连接接着旧连接当前的位置、血量和背包继续。
       const state = world.getPlayer(existing.playerId);
       if (state) saved = toSave(state);
       const oldWs = existing.client.ws;
@@ -194,15 +198,17 @@ async function main(): Promise<void> {
       return;
     }
     const { spawn, hp } = spawnFromSave(saved, (x, z) => isWalkable(map, x, z));
-    const playerId = world.join(session.name, client.conn, performance.now(), spawn, hp);
+    // 背包不受死亡和位置的影响，存档里有就原样带进去。
+    const playerId = world.join(session.name, client.conn, performance.now(), spawn, hp, saved?.items);
     const state = world.getPlayer(playerId);
+    const entered = state ? toSave(state) : null;
     const player: OnlinePlayer = {
       client,
       playerId,
       accountId: session.accountId,
       characterId: session.characterId,
       // 存档和进入世界时的状态不一样（比如新角色、死亡后重新上线）时，下次自动保存会写一次。
-      lastMarked: saved && state && saved.x === state.x && saved.z === state.z && saved.hp === state.hp ? toSave(state) : null,
+      lastMarked: saved && entered && sameSave(saved, entered) ? entered : null,
     };
     client.player = player;
     online.set(session.accountId, player);
@@ -226,6 +232,7 @@ async function main(): Promise<void> {
     return {
       players: world.playerCount,
       monsters: world.monsterCount,
+      drops: world.dropCount,
       tickMs: {
         avg: w.ticks > 0 ? round3(w.totalMs / w.ticks) : 0,
         max: round3(w.maxMs),
@@ -278,6 +285,9 @@ async function main(): Promise<void> {
           break;
         case 'target':
           if (client.player) world.setTarget(client.player.playerId, msg.id);
+          break;
+        case 'use':
+          if (client.player) world.useItem(client.player.playerId, msg.item, now);
           break;
         case 'ping':
           client.conn.send({ t: 'pong', c: msg.c, s: now });
@@ -343,7 +353,8 @@ async function main(): Promise<void> {
       console.log(
         `[stats] players=${s.players} tick avg=${s.tickMs.avg}ms max=${s.tickMs.max}ms ` +
           `pathfinds=${s.pathfinds} deferred=${s.deferredPathfinds} rejected=${s.rejectedMoves} skipped=${s.skippedTicks} ` +
-          `monsters=${s.monsters} monsterPathfinds=${s.monsterPathfinds} hits=${s.hits}`,
+          `monsters=${s.monsters} monsterPathfinds=${s.monsterPathfinds} hits=${s.hits} ` +
+          `drops=${s.drops} dropped=${s.dropped} pickedUp=${s.pickedUp}`,
       );
     }
   }, STATS_WINDOW_MS);
@@ -361,7 +372,7 @@ async function main(): Promise<void> {
     clearInterval(heartbeat);
     clearInterval(autosaveTimer);
 
-    // 先把所有人的位置和血量记下来，再断开连接、写库。
+    // 先把所有人的位置、血量和背包记下来，再断开连接、写库。
     for (const player of [...online.values()]) removeFromWorld(player);
     for (const ws of wss.clients) ws.close(1001, 'server shutting down');
     wss.close();
@@ -376,7 +387,7 @@ async function main(): Promise<void> {
         }),
       ]);
     } catch (err) {
-      console.error(`[db] 关服时保存角色失败，${characters.pendingCount} 个角色的位置和血量没有写进库：${errorText(err)}`);
+      console.error(`[db] 关服时保存角色失败，${characters.pendingCount} 个角色的位置、血量和背包没有写进库：${errorText(err)}`);
     }
     clearTimeout(timeout);
     await Promise.allSettled([pool.end(), redis.close()]);

@@ -17,7 +17,7 @@ import {
   TICK_RATE,
 } from '@mmo/shared';
 import type { Pathfinder } from '@mmo/shared';
-import type { Entity, Monster, Player } from './entity';
+import type { Character, Monster, Player } from './entity';
 
 /** 同一只怪物两次追击寻路的最小间隔。 */
 const REPATH_MS = 300;
@@ -37,7 +37,7 @@ export interface AiHost {
   playersNear(m: Monster): readonly Player[];
   findPlayer(id: number): Player | undefined;
   inSafeZone(x: number, z: number): boolean;
-  dealDamage(attacker: Entity, target: Entity, amount: number, now: number): void;
+  dealDamage(attacker: Character, target: Character, amount: number, now: number): void;
   /** 怪物的位置变了，更新 AOI 并通知视野变化。 */
   moved(m: Monster): void;
   /** 把怪物移出 AOI，周围的玩家收到 leave。 */

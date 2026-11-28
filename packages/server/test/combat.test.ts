@@ -85,7 +85,8 @@ describe('玩家攻击', () => {
   function setup(playerX: number, playerZ = 100.5, blockedCells: [number, number][] = []) {
     const map = emptyMap(256);
     for (const [cx, cz] of blockedCells) map.blocked[cz * 256 + cx] = 1;
-    const world = new World(map);
+    // 掉落用固定的随机数：只掉金币，落在怪物西边、玩家够不着的地方，不干扰这里对消息的检查。
+    const world = new World(map, () => 0.5);
     const sim = new Sim(world);
     const monsterId = world.spawnMonster(100.5, 100.5);
     const conn = new FakeConn();

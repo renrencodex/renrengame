@@ -1,6 +1,6 @@
 /**
- * 机器人压测：连上 N 个机器人在地图上随机走动，附近有怪物时上去打，
- * 统计每个机器人收到的同步量，以及命中、击杀和死亡的次数。
+ * 机器人压测：连上 N 个机器人在地图上随机走动，附近有怪物时上去打，地上有东西就去捡，血少了喝药水，
+ * 统计每个机器人收到的同步量，以及命中、击杀、死亡、拾取和喝药水的次数。
  *
  * 用法：pnpm bots [--count 200] [--duration 30] [--url ws://localhost:8080/ws] [--password ...] [--peaceful]
  * duration 为 0 时一直运行，直到按 Ctrl+C。加 --peaceful 时机器人只走路、不主动打怪（怪物仍然会打它们）。
@@ -18,12 +18,24 @@ import {
   encode,
   generateMap,
   isValidMoveTarget,
+  PLAYER_MAX_HP,
+  POTION_COOLDOWN_MS,
   SERVER_PORT,
   STATE_DEAD,
   STATE_MOVING,
   WS_PATH,
 } from '@mmo/shared';
-import type { ApiError, AuthRequest, AuthSuccess, ClientMsg, EntityKind, EntityState, GameMap, Point } from '@mmo/shared';
+import type {
+  ApiError,
+  AuthRequest,
+  AuthSuccess,
+  CharacterKind,
+  ClientMsg,
+  EntityState,
+  GameMap,
+  Inventory,
+  Point,
+} from '@mmo/shared';
 
 const { values } = parseArgs({
   options: {
@@ -50,6 +62,13 @@ const CHASE_REORDER_DISTANCE = 1;
 /** 同一只怪物追了这么久还没打死就放弃（比如它在墙后面够不着），歇一会儿再找别的。 */
 const GIVE_UP_MS = 20000;
 const REST_MS = 5000;
+/** 这么近的掉落物才会去捡。 */
+const LOOT_RADIUS = 14;
+/** 朝一堆掉落物走了这么久还没捡到（比如药水带满了）就不再理它。 */
+const LOOT_GIVE_UP_MS = 6000;
+const LOOT_EVERY_MS = 500;
+/** 血量低于这个比例时喝药水。 */
+const DRINK_BELOW = 0.5;
 /** 同时进行的登录请求数。服务端算密码哈希比较慢，开太多只会排队。 */
 const LOGIN_CONCURRENCY = 8;
 
@@ -98,9 +117,9 @@ async function obtainTokens(count: number): Promise<string[]> {
 
 let map: GameMap | null = null;
 
-/** 机器人视野里的一个实体。 */
+/** 机器人视野里的一个玩家或怪物。 */
 interface Seen {
-  kind: EntityKind;
+  kind: CharacterKind;
   x: number;
   z: number;
   state: EntityState;
@@ -112,8 +131,10 @@ class Bot {
   z = 0;
   ready = false;
   closed = false;
-  /** 视野内的实体，包括自己。 */
+  /** 视野内的玩家和怪物，包括自己。 */
   readonly visible = new Map<number, Seen>();
+  /** 视野内地上的物品。 */
+  readonly drops = new Map<number, Point>();
   snaps = 0;
   bytes = 0;
   /** 快照里出现、但没有先收到 enter 的实体数。应该一直是 0。 */
@@ -122,7 +143,19 @@ class Bot {
   hitsTaken = 0;
   kills = 0;
   deaths = 0;
+  /** 捡到的物品堆数、金币数，和喝掉的药水数。 */
+  pickups = 0;
+  goldGained = 0;
+  potionsUsed = 0;
   nextMoveAt = 0;
+  private hp = PLAYER_MAX_HP;
+  private inventory: Inventory | null = null;
+  private nextPotionAt = 0;
+  private lootId = 0;
+  private lootSince = 0;
+  private nextLootAt = 0;
+  /** 试过但捡不起来的掉落物，不再去捡。 */
+  private readonly ignoredDrops = new Set<number>();
   private moving = false;
   private dead = false;
   private targetId = 0;
@@ -165,22 +198,30 @@ class Bot {
       case 'welcome':
         this.selfId = msg.selfId;
         map ??= generateMap(msg.seed);
+        // 刚进入世界时，服务器那边药水先走一轮冷却。
+        this.nextPotionAt = Date.now() + POTION_COOLDOWN_MS;
         break;
       case 'enter':
         for (const e of msg.entities) {
+          if (e.kind === 'drop') {
+            this.drops.set(e.id, { x: e.x, z: e.z });
+            continue;
+          }
           this.visible.set(e.id, { kind: e.kind, x: e.x, z: e.z, state: e.state });
-          if (e.id === this.selfId) this.onSelfState(e.x, e.z, e.state);
+          if (e.id === this.selfId) this.onSelfState(e.x, e.z, e.state, e.hp);
         }
         break;
       case 'leave':
         for (const id of msg.ids) {
           this.visible.delete(id);
+          this.drops.delete(id);
+          this.ignoredDrops.delete(id);
           this.lastAttacker.delete(id);
         }
         break;
       case 'snap':
         this.snaps++;
-        for (const [id, x, z, state] of msg.entities) {
+        for (const [id, x, z, state, hp] of msg.entities) {
           const seen = this.visible.get(id);
           if (!seen) {
             this.unknownInSnap++;
@@ -192,7 +233,7 @@ class Bot {
           seen.x = x;
           seen.z = z;
           seen.state = state;
-          if (id === this.selfId) this.onSelfState(x, z, state);
+          if (id === this.selfId) this.onSelfState(x, z, state, hp);
         }
         break;
       case 'hit':
@@ -200,30 +241,101 @@ class Bot {
         if (msg.to === this.selfId) this.hitsTaken++;
         this.lastAttacker.set(msg.to, msg.from);
         break;
+      case 'inv':
+        this.onInventory(msg.items);
+        break;
+      case 'heal':
       case 'pong':
         break;
     }
   }
 
-  private onSelfState(x: number, z: number, state: EntityState): void {
+  /** 和上一次的背包比：多出来的是捡到的，药水少了是喝掉的。 */
+  private onInventory(items: Inventory): void {
+    const before = this.inventory;
+    this.inventory = items;
+    if (!before) return;
+    const gold = (items.gold ?? 0) - (before.gold ?? 0);
+    const potions = (items.potion ?? 0) - (before.potion ?? 0);
+    if (gold > 0) {
+      this.pickups++;
+      this.goldGained += gold;
+    }
+    if (potions > 0) this.pickups++;
+    if (potions < 0) {
+      this.potionsUsed -= potions;
+      this.nextPotionAt = Date.now() + POTION_COOLDOWN_MS;
+    }
+  }
+
+  private onSelfState(x: number, z: number, state: EntityState, hp: number): void {
     this.x = x;
     this.z = z;
+    this.hp = hp;
     this.moving = state === STATE_MOVING;
     this.ready = true;
     const dead = state === STATE_DEAD;
     if (dead && !this.dead) {
       this.deaths++;
       this.targetId = 0;
+      this.lootId = 0;
       this.destination = null;
     }
     this.dead = dead;
   }
 
-  /** 每 100 毫秒调用一次：死了就等复活，附近有怪物就打，否则随机走动。 */
+  /** 每 100 毫秒调用一次：死了就等复活，血少了喝药水，手头没有怪物时先捡东西，附近有怪物就打，否则随机走动。 */
   act(now: number): void {
     if (!this.ready || !map || this.dead) return;
+    this.drink(now);
+    if (this.targetId === 0 && this.loot(now, map)) return;
     if (FIGHT && this.fight(now, map)) return;
     this.wander(now, map);
+  }
+
+  private drink(now: number): void {
+    if (now < this.nextPotionAt || this.hp > PLAYER_MAX_HP * DRINK_BELOW) return;
+    if ((this.inventory?.potion ?? 0) < 1) return;
+    // 先按一秒算，等服务器确认喝掉了再按真正的冷却时间算。
+    this.nextPotionAt = now + 1000;
+    this.send({ t: 'use', item: 'potion' });
+  }
+
+  /**
+   * 捡东西：走到最近的一堆掉落物那里，走近了服务器会自动让角色捡起来。
+   * 返回 false 表示附近没有要捡的东西。
+   */
+  private loot(now: number, map: GameMap): boolean {
+    let drop = this.lootId !== 0 ? this.drops.get(this.lootId) : undefined;
+    if (drop && now - this.lootSince > LOOT_GIVE_UP_MS) {
+      this.ignoredDrops.add(this.lootId);
+      drop = undefined;
+    }
+    if (!drop) {
+      this.lootId = 0;
+      let bestDistance = LOOT_RADIUS;
+      for (const [id, d] of this.drops) {
+        if (this.ignoredDrops.has(id)) continue;
+        const distance = Math.hypot(d.x - this.x, d.z - this.z);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          this.lootId = id;
+          drop = d;
+        }
+      }
+      if (!drop) return false;
+      this.lootSince = now;
+      this.nextLootAt = 0;
+    }
+    if (now < this.nextLootAt) return true;
+    this.nextLootAt = now + LOOT_EVERY_MS;
+    if (isValidMoveTarget(map, this.x, this.z, drop.x, drop.z, CLIENT_MOVE_DISTANCE)) {
+      this.send({ t: 'moveTo', x: drop.x, z: drop.z });
+    } else {
+      this.ignoredDrops.add(this.lootId);
+      this.lootId = 0;
+    }
+    return true;
   }
 
   /**
@@ -346,6 +458,10 @@ function report(label: string): void {
   let hitsTaken = 0;
   let kills = 0;
   let deaths = 0;
+  let pickups = 0;
+  let gold = 0;
+  let potionsUsed = 0;
+  let dropsSum = 0;
   for (const b of bots) {
     snaps += b.snaps;
     bytes += b.bytes;
@@ -354,16 +470,22 @@ function report(label: string): void {
     hitsTaken += b.hitsTaken;
     kills += b.kills;
     deaths += b.deaths;
+    pickups += b.pickups;
+    gold += b.goldGained;
+    potionsUsed += b.potionsUsed;
   }
   for (const b of online) {
+    dropsSum += b.drops.size;
     visibleSum += b.visible.size;
     visibleMax = Math.max(visibleMax, b.visible.size);
   }
   const seconds = Math.max(0.001, (now - lastReportAt) / 1000);
   console.log(
-    `[bots] ${label} 在线 ${online.length}/${COUNT} | 视野内实体 平均 ${(visibleSum / n).toFixed(1)} 最多 ${visibleMax} | ` +
+    `[bots] ${label} 在线 ${online.length}/${COUNT} | 视野内实体 平均 ${(visibleSum / n).toFixed(1)} 最多 ${visibleMax} ` +
+      `掉落物 平均 ${(dropsSum / n).toFixed(1)} | ` +
       `每个机器人 ${((snaps - lastSnaps) / seconds / n).toFixed(1)} 快照/秒 ${((bytes - lastBytes) / seconds / n / 1024).toFixed(2)} KB/秒 | ` +
-      `快照里的未知实体 ${unknown} | 累计 命中 ${hitsDealt} 被命中 ${hitsTaken} 击杀 ${kills} 死亡 ${deaths}`,
+      `快照里的未知实体 ${unknown} | 累计 命中 ${hitsDealt} 被命中 ${hitsTaken} 击杀 ${kills} 死亡 ${deaths} ` +
+      `拾取 ${pickups} 堆（金币 ${gold}）喝药水 ${potionsUsed}`,
   );
   lastReportAt = now;
   lastSnaps = snaps;

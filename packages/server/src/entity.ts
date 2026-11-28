@@ -1,4 +1,4 @@
-import type { Mover, Point, ServerMsg } from '@mmo/shared';
+import type { Inventory, ItemId, Mover, Point, ServerMsg } from '@mmo/shared';
 
 /** 世界向某个玩家发消息的出口。世界本身不关心底层是 WebSocket 还是别的。 */
 export interface Connection {
@@ -29,6 +29,10 @@ export interface Player extends EntityBase {
   /** 最近一次打人或挨打的时间，用来判断是否脱离战斗。 */
   lastCombatAt: number;
   nextRegenAt: number;
+  /** 背包。数量为 0 的物品不留在里面。 */
+  inventory: Inventory;
+  /** 下一次能喝药水的时间。 */
+  nextPotionAt: number;
 }
 
 /**
@@ -55,4 +59,21 @@ export interface Monster extends EntityBase {
   hideAt: number;
 }
 
-export type Entity = Player | Monster;
+/** 掉在地上的物品。它和玩家、怪物共用 id 和视野机制，但不会动，也不出现在快照里。 */
+export interface Drop {
+  readonly kind: 'drop';
+  readonly id: number;
+  readonly x: number;
+  readonly z: number;
+  readonly item: ItemId;
+  readonly count: number;
+  /** 这个时间之前捡不起来，让客户端来得及把它显示出来。 */
+  readonly pickableAt: number;
+  /** 到这个时间还没人捡就消失。 */
+  readonly expireAt: number;
+}
+
+/** 会走会打的实体。 */
+export type Character = Player | Monster;
+
+export type Entity = Character | Drop;

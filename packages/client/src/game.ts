@@ -3,14 +3,19 @@ import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import {
   generateMap,
   INTERP_DELAY_MS,
+  ITEM_IDS,
+  ITEMS,
   Pathfinder,
   PLAYER_MAX_HP,
   PLAYER_RESPAWN_MS,
+  POTION_COOLDOWN_MS,
   STATE_DEAD,
   STATE_MOVING,
 } from '@mmo/shared';
-import type { EntityInfo, EntityKind, EntityState, ServerMsg } from '@mmo/shared';
+import type { CharacterKind, DropInfo, EntityInfo, EntityState, Inventory, ServerMsg } from '@mmo/shared';
 import { CameraRig } from './camera';
+import { DropView } from './drops';
+import type { ItemAssets } from './drops';
 import { FloatingTexts, TargetRing } from './effects';
 import { EntityView } from './entities';
 import type { CharacterAssets } from './entities';
@@ -29,15 +34,19 @@ import { Targeting } from './targeting';
 interface Remote {
   view: EntityView;
   buffer: SnapshotBuffer;
-  kind: EntityKind;
+  kind: CharacterKind;
   dead: boolean;
   /** 最新快照里的位置。画面上显示的是插值后稍早一点的位置，追击要用最新的。 */
   x: number;
   z: number;
 }
 
-/** 点选怪物时的最小半径（像素），保证离得远、看起来很小的怪物也点得中。 */
+/** 点选怪物和物品时的最小半径（像素），保证离得远、看起来很小的目标也点得中。 */
 const MIN_PICK_RADIUS = 22;
+/** 发出喝药水的请求之后，这么久之内不再发第二次，等服务器的结果。 */
+const USE_RETRY_MS = 500;
+/** 同时捡到几样东西时，每一行提示文字之间的间隔。 */
+const LOOT_TEXT_GAP = 0.4;
 
 /** 客户端主体：把网络消息变成场景里的角色，并驱动每一帧的更新和渲染。 */
 export class Game {
@@ -52,12 +61,19 @@ export class Game {
   private readonly ring = new TargetRing();
   private readonly floating: FloatingTexts;
   private readonly remotes = new Map<number, Remote>();
+  /** 视野里掉在地上的物品。 */
+  private readonly drops = new Map<number, DropView>();
   private readonly sample: Sample = { x: 0, z: 0, moving: false };
   private readonly projected = new THREE.Vector3();
   private selfView: EntityView | null = null;
   private selfDead = false;
+  private selfHp = PLAYER_MAX_HP;
   /** 预计复活的本地时间，只用来显示倒计时；真正的复活以服务器的消息为准。 */
   private respawnAt = 0;
+  /** 服务器最近一次发来的背包。还没收到过时为 null。 */
+  private inventory: Inventory | null = null;
+  /** 这个时间之前不发喝药水的请求。服务器有自己的冷却判定，这里只是不发注定失败的请求。 */
+  private potionReadyAt: number;
   private lastFrameAt = performance.now();
 
   constructor(
@@ -65,6 +81,7 @@ export class Game {
     private readonly net: Net,
     private readonly hud: Hud,
     private readonly assets: CharacterAssets | null,
+    private readonly itemAssets: ItemAssets,
     private readonly selfId: number,
     seed: number,
   ) {
@@ -99,7 +116,13 @@ export class Game {
       (px, py) => this.onPick(px, py),
     );
 
+    // 刚进入世界时，服务器那边药水先走一轮冷却。
+    this.potionReadyAt = performance.now() + POTION_COOLDOWN_MS;
+    this.hud.setPotionCooldown(this.potionReadyAt);
+    this.hud.onUsePotion = () => this.usePotion();
+
     window.addEventListener('resize', this.resize);
+    window.addEventListener('keydown', this.onKeyDown);
     this.resize();
     this.renderer.setAnimationLoop(this.frame);
   }
@@ -112,9 +135,16 @@ export class Game {
       case 'leave':
         for (const id of msg.ids) {
           const remote = this.remotes.get(id);
-          if (!remote) continue;
-          remote.view.dispose();
-          this.remotes.delete(id);
+          if (remote) {
+            remote.view.dispose();
+            this.remotes.delete(id);
+            continue;
+          }
+          const drop = this.drops.get(id);
+          if (drop) {
+            drop.dispose();
+            this.drops.delete(id);
+          }
         }
         break;
       case 'snap':
@@ -136,6 +166,12 @@ export class Game {
       case 'hit':
         this.onHit(msg.from, msg.to, msg.damage);
         break;
+      case 'heal':
+        this.onHeal(msg.id, msg.amount);
+        break;
+      case 'inv':
+        this.onInventory(msg.items);
+        break;
       case 'welcome':
       case 'pong':
         break;
@@ -145,11 +181,17 @@ export class Game {
   stop(): void {
     this.renderer.setAnimationLoop(null);
     window.removeEventListener('resize', this.resize);
+    window.removeEventListener('keydown', this.onKeyDown);
     this.input.enabled = false;
+    this.hud.onUsePotion = null;
     this.hud.setBanner(null);
   }
 
   private onEnter(info: EntityInfo): void {
+    if (info.kind === 'drop') {
+      this.onDropEnter(info);
+      return;
+    }
     if (info.id === this.selfId) {
       // 进入世界，或者死亡后在出生点复活（服务端按“离开再进入”处理）。
       this.local.place(info.x, info.z);
@@ -187,8 +229,16 @@ export class Game {
     remote.buffer.push(this.net.serverNow(), info.x, info.z, info.state === STATE_MOVING);
   }
 
+  private onDropEnter(info: DropInfo): void {
+    if (this.drops.has(info.id)) return;
+    const drop = new DropView(info, this.itemAssets);
+    this.drops.set(info.id, drop);
+    this.world.scene.add(drop.root);
+  }
+
   /** 服务器发来的自己的权威状态。 */
   private onSelfState(x: number, z: number, state: EntityState, hp: number): void {
+    this.selfHp = hp;
     this.selfView?.setHp(hp);
     this.hud.setHp(hp, PLAYER_MAX_HP);
 
@@ -226,6 +276,57 @@ export class Game {
     this.floating.spawn(x, target.height + 0.3, z, `-${damage}`, className);
   }
 
+  private onHeal(id: number, amount: number): void {
+    const view = this.viewOf(id);
+    if (!view) return;
+    const { x, z } = view.root.position;
+    this.floating.spawn(x, view.height + 0.3, z, `+${amount}`, 'heal-text');
+  }
+
+  /**
+   * 服务器发来的背包。和上一次比，多出来的就是刚捡到的，在自己头上提示一下；
+   * 药水少了说明刚喝了一瓶，开始冷却。
+   */
+  private onInventory(items: Inventory): void {
+    const before = this.inventory;
+    this.inventory = items;
+    this.hud.setInventory(items.gold ?? 0, items.potion ?? 0);
+    // 第一次是进入世界时的背包，不算捡到。
+    if (!before) return;
+
+    if ((items.potion ?? 0) < (before.potion ?? 0)) {
+      this.potionReadyAt = performance.now() + POTION_COOLDOWN_MS;
+      this.hud.setPotionCooldown(this.potionReadyAt);
+    }
+    if (!this.selfView) return;
+    const { x, z } = this.selfView.root.position;
+    let line = 0;
+    for (const id of ITEM_IDS) {
+      const gained = (items[id] ?? 0) - (before[id] ?? 0);
+      if (gained <= 0) continue;
+      // 从名字和血条的上方冒出来，不和它们叠在一起。
+      const y = this.selfView.height + 0.9 + line++ * LOOT_TEXT_GAP;
+      this.floating.spawn(x, y, z, `+${gained} ${ITEMS[id].name}`, `loot-text ${id}`);
+    }
+  }
+
+  /** 喝一瓶治疗药水。能不能喝由服务器判定，这里只拦掉明显喝不了的情况。 */
+  private usePotion(): void {
+    const now = performance.now();
+    if (!this.selfView || this.selfDead || now < this.potionReadyAt) return;
+    if ((this.inventory?.potion ?? 0) < 1 || this.selfHp >= PLAYER_MAX_HP) return;
+    this.potionReadyAt = now + USE_RETRY_MS;
+    this.net.send({ t: 'use', item: 'potion' });
+  }
+
+  private readonly onKeyDown = (ev: KeyboardEvent): void => {
+    // 按住不放时的自动重复不算；正在输入框里打字时也不算。
+    if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const target = ev.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    if (ev.key === '1') this.usePotion();
+  };
+
   private viewOf(id: number): EntityView | null {
     return id === this.selfId ? this.selfView : (this.remotes.get(id)?.view ?? null);
   }
@@ -242,7 +343,7 @@ export class Game {
     this.marker.show(x, z);
   }
 
-  /** 按下时先看有没有点中怪物。px、py 是相对画布左上角的像素坐标。 */
+  /** 按下时先看有没有点中怪物或地上的物品。px、py 是相对画布左上角的像素坐标。 */
   private onPick(px: number, py: number): boolean {
     if (!this.selfView || this.selfDead) return false;
     const canvas = this.renderer.domElement;
@@ -252,14 +353,13 @@ export class Game {
     camera.updateMatrixWorld();
     const v = this.projected;
     const candidates: PickCandidate[] = [];
-    for (const [id, remote] of this.remotes) {
-      if (remote.kind !== 'monster' || remote.dead) continue;
-      const pos = remote.view.root.position;
-      v.set(pos.x, 0, pos.z).project(camera);
-      if (v.z < -1 || v.z > 1) continue;
+    /** 一个从地面 (x, z) 立起来、高 h 的目标，在屏幕上占的位置。 */
+    const add = (id: number, x: number, z: number, h: number): void => {
+      v.set(x, 0, z).project(camera);
+      if (v.z < -1 || v.z > 1) return;
       const footX = (v.x + 1) * 0.5 * width;
       const footY = (1 - v.y) * 0.5 * height;
-      v.set(pos.x, remote.view.height, pos.z).project(camera);
+      v.set(x, h, z).project(camera);
       const headX = (v.x + 1) * 0.5 * width;
       const headY = (1 - v.y) * 0.5 * height;
       candidates.push({
@@ -268,9 +368,22 @@ export class Game {
         y: (footY + headY) / 2,
         radius: Math.max(MIN_PICK_RADIUS, Math.hypot(headX - footX, headY - footY) * 0.6),
       });
+    };
+    for (const [id, remote] of this.remotes) {
+      if (remote.kind !== 'monster' || remote.dead) continue;
+      const pos = remote.view.root.position;
+      add(id, pos.x, pos.z, remote.view.height);
     }
+    for (const [id, drop] of this.drops) add(id, drop.x, drop.z, drop.height);
+
     const id = pickEntity(candidates, px, py);
     if (id === 0) return false;
+    const drop = this.drops.get(id);
+    if (drop) {
+      // 点地上的物品就是走到它那里，走到跟前服务器会自动让角色捡起来。
+      this.onMoveInput(drop.x, drop.z);
+      return true;
+    }
     if (id !== this.targeting.targetId) {
       this.targeting.set(id);
       this.net.send({ t: 'target', id });
@@ -342,6 +455,7 @@ export class Game {
       }
       remote.view.update(dt);
     }
+    for (const drop of this.drops.values()) drop.update(dt);
 
     this.marker.update(dt);
     this.ring.update(dt);

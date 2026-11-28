@@ -29,7 +29,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 ## 改完代码怎么验证
 
 1. 每次都跑 `pnpm typecheck` 和 `pnpm test`。
-2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。机器人会打怪，“命中”应该大于 0；机器人很多时它们几乎不会死，死亡和复活要靠单测或者自己进游戏验证。
+2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。机器人会打怪和捡东西，“命中”和“拾取”应该大于 0；机器人很多时它们几乎不会死，也不喝药水，这些要用很少的机器人（`--count 30 --duration 60`）、单测或者自己进游戏验证。
 3. 改了客户端的画面或交互，单测覆盖不到。可以用无头 Chromium 打开页面检查，启动参数加 `--use-angle=swiftshader --enable-unsafe-swiftshader` 才有 WebGL。做不了就在回复里明确说画面没有验证过。
 
 新增逻辑时把测试放在对应包的 `test/` 目录，文件名以 `.test.ts` 结尾。
@@ -38,7 +38,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 
 **服务器权威**
 
-- 客户端只发送意图（`moveTo`：想去哪，`target`：想打谁），位置、血量等状态一律由服务器计算。不要加“客户端上报自己位置”“客户端上报造成了多少伤害”这类消息。
+- 客户端只发送意图（`moveTo`：想去哪，`target`：想打谁，`use`：想用哪种物品），位置、血量、背包等状态一律由服务器计算。不要加“客户端上报自己位置”“客户端上报造成了多少伤害”“客户端上报捡到了什么”这类消息。
 - 每一种客户端消息都要在 `shared/src/protocol.ts` 的 `decodeClientMsg` 里严格校验字段类型和范围，校验不过就丢弃。
 
 **追击由客户端驱动，服务端只判定伤害**
@@ -53,16 +53,25 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 怪物 AI（`server/src/monsterAi.ts`）是同步的状态机，通过 `AiHost` 接口访问世界。怪物寻路有单独的每 tick 上限（`MAX_MONSTER_PATHFINDS_PER_TICK`），不占玩家的额度。
 - 怪物用的是另一个寻路器，安全区里的格子在它眼里是障碍，所以怪物的任何路线都不会穿过安全区。安全区按格子判定（`World.inSafeZone`），判定玩家是否安全和怪物能不能走进去必须用同一个边界。
 
+**地上的物品和背包**
+
+- 地上的物品（`Drop`）是第三种实体，和玩家、怪物共用 id 空间、AOI、`enter` 和 `leave`，但它不会动，**不出现在快照里**。`EntityInfo` 是 `CharacterInfo | DropInfo`，用到 `name`、`hp`、`state` 之前先按 `kind` 区分。
+- 拾取没有客户端消息：`World.tick` 里每个活着的玩家检查脚边 `PICKUP_RADIUS` 内的物品（`server/src/drops.ts` 的小格子索引），捡到就移出视野。客户端点地上的物品只是发一次普通的 `moveTo`。
+- 背包只有服务器能改，每次变化都把整个背包用 `inv` 发给玩家自己。客户端拿前后两次的背包比较，得出“捡到了什么”“是不是刚喝了药水”，不要为这些再加消息。`heal` 和 `hit` 一样只用来飘字，积压时会被丢掉。
+- 加一种物品要改三处：`shared/src/items.ts` 的 `ITEMS`、`client/src/drops.ts` 的 `ITEM_LOOKS`，以及 `tools/models/build-items.mjs`（生成 `item_<物品名>.glb`；没有模型时客户端用小方块代替）。
+- 背包存在 `characters.items` 这一列（JSON，比如 `{"gold": 12, "potion": 2}`），和位置、血量一起由 `CharacterStore` 写库。读出来要经过 `sanitizeInventory`，所以从 `ITEMS` 里删掉一种物品时，存档里的这种物品会在下次上线后消失。
+- 掉什么、掉在哪用的是 `World` 构造函数的第二个参数（默认 `Math.random`）。单测里只要有怪物被打死，就传一个固定的函数进去，否则掉落的位置和拾取的时机每次都不一样。
+
 **共用的规则放在 shared**
 
 - 地图生成、寻路、移动这些代码客户端预测和服务器模拟用的是同一份。只改一边会让客户端不断被服务器纠正。
-- 协议的类型和编解码都集中在 `protocol.ts`，游戏参数集中在 `constants.ts`，不要在别处写死数字。
+- 协议的类型和编解码都集中在 `protocol.ts`，游戏参数集中在 `constants.ts`，物品的定义集中在 `items.ts`，不要在别处写死数字。
 - `shared` 没有构建步骤，其他包直接引用它的 TypeScript 源码。
 
 **游戏循环里不能等待 I/O**
 
 - `World.tick` 及它调用的代码必须是同步的，不能访问数据库或 Redis。
-- 要保存角色数据（位置、血量）时，调用 `CharacterStore.markDirty` 记在内存里，由定时的 `flush` 批量写库。
+- 要保存角色数据（位置、血量、背包）时，调用 `CharacterStore.markDirty` 记在内存里，由定时的 `flush` 批量写库。
 - `World` 不依赖 `ws`、`pg`、`redis`，只通过 `Connection` 接口发消息；`CharacterStore` 只依赖 `Queryable` 接口。保持这一点，它们才能脱离外部服务做单测。
 
 **进入世界的流程**
@@ -100,9 +109,10 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 ## 容易踩的坑
 
 - **不要提交 `packages/server/.env`**，里面有数据库密码，已经在 `.gitignore` 里。
-- `pnpm dev` 运行时，改动服务器或 `shared` 的文件会让服务器自动重启，在线的玩家会断线（位置和血量会在关闭前保存），怪物全部重新生成。
+- `pnpm dev` 运行时，改动服务器或 `shared` 的文件会让服务器自动重启，在线的玩家会断线（位置、血量和背包会在关闭前保存），怪物全部重新生成，地上的物品消失。
 - 单测里要放障碍物时，在 `new World(map)` 之前改 `map.blocked`。`World` 在构造时为怪物复制了一份地图，之后再改，怪物看不到。
 - 数据库和 Redis 可能和别的项目共用同一个实例。只操作 `DATABASE_URL` 指向的库和带 `mmo:` 前缀的键，不要停止或重启这些服务，不要执行 `DROP`、`TRUNCATE`、`FLUSHALL`。
 - 测试时创建的账号用完要删掉。压测脚本的“机器人N”账号用的是公开的默认密码，只能出现在本地环境。
-- `packages/client/public/models/` 里的人物模型是 `tools/models/build.mjs` 生成的，不要手工改。客户端按名字找模型里的材质（`Skin`、`Shirt`、`Pants`、`Boots`、`Hair`、`Eyes`）、节点（`Hair`）和动作（`Idle_Loop`、`Jog_Fwd_Loop`、`Punch_Jab`、`Punch_Cross`、`Death01`），改脚本里的名字要同时改 `packages/client/src/entities.ts`。重新生成的步骤和素材的来源、授权见 README 的“素材”。
+- `packages/client/public/models/` 里的人物模型是 `tools/models/build.mjs` 生成的，不要手工改。客户端按名字找模型里的材质（`Skin`、`Shirt`、`Pants`、`Boots`、`Hair`、`Eyes`）、节点（`Hair`）和动作（`Idle_Loop`、`Jog_Fwd_Loop`、`Punch_Jab`、`Punch_Cross`、`Death01`），改脚本里的名字要同时改 `packages/client/src/entities.ts`。物品模型 `item_<物品名>.glb` 是 `tools/models/build-items.mjs` 生成的，客户端按文件名加载。重新生成的步骤和素材的来源、授权见 README 的“素材”。
+- 存档只在角色进过世界之后才读：`CharacterStore.load` 对位置为空的角色返回 `null`，这时 `items` 列也不会被读。测试时想预先给角色放物品，要把 `x`、`z` 一起填上。
 - `packages/client/vite.config.ts` 的 `allowedHosts` 里放行了一个远程预览域名，换预览环境时要在这里加新的域名。

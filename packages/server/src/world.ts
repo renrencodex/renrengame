@@ -1,8 +1,14 @@
 import {
   AOI_CELL_SIZE,
   ATTACK_RANGE,
+  DROP_LIFETIME_MS,
+  DROP_PICKUP_DELAY_MS,
+  DROP_SCATTER_RADIUS,
+  GOLD_DROP_MAX,
+  GOLD_DROP_MIN,
   isValidMoveTarget,
   isWalkable,
+  ITEMS,
   MAX_PATHFINDS_PER_TICK,
   MONSTER_MAX_HP,
   MONSTER_NAME,
@@ -10,13 +16,18 @@ import {
   MOVE_SPEED,
   mulberry32,
   Pathfinder,
+  PICKUP_RADIUS,
   PLAYER_ATTACK_DAMAGE,
   PLAYER_ATTACK_INTERVAL_MS,
   PLAYER_MAX_HP,
   PLAYER_RESPAWN_MS,
+  POTION_COOLDOWN_MS,
+  POTION_DROP_CHANCE,
+  POTION_HEAL,
   REGEN_DELAY_MS,
   REGEN_PER_SECOND,
   SAFE_ZONE_RADIUS,
+  sanitizeInventory,
   sanitizeName,
   setPath,
   SNAPSHOT_EVERY_TICKS,
@@ -27,10 +38,20 @@ import {
   stepMover,
   TICK_RATE,
 } from '@mmo/shared';
-import type { EntityInfo, EntityState, GameMap, Point, ServerMsg, SnapEntity } from '@mmo/shared';
+import type {
+  EntityInfo,
+  EntityState,
+  GameMap,
+  Inventory,
+  ItemId,
+  Point,
+  ServerMsg,
+  SnapEntity,
+} from '@mmo/shared';
 import { AoiGrid } from './aoi';
 import type { CellChange } from './aoi';
-import type { Connection, Entity, Monster, MonsterAiState, Player } from './entity';
+import { DropGrid } from './drops';
+import type { Character, Connection, Drop, Entity, Monster, MonsterAiState, Player } from './entity';
 import { MonsterAi } from './monsterAi';
 import type { AiHost } from './monsterAi';
 
@@ -45,6 +66,10 @@ export interface WorldStats {
   rejectedMoves: number;
   /** 累计的命中次数（玩家打怪物和怪物打玩家）。 */
   hits: number;
+  /** 累计掉到地上的物品堆数。 */
+  dropped: number;
+  /** 累计被捡起的物品堆数。 */
+  pickedUp: number;
 }
 
 export interface PlayerState {
@@ -54,6 +79,8 @@ export interface PlayerState {
   moving: boolean;
   hp: number;
   dead: boolean;
+  /** 背包内容的一份拷贝。 */
+  items: Inventory;
 }
 
 export interface MonsterState {
@@ -72,33 +99,52 @@ const REGEN_INTERVAL_MS = 1000 / REGEN_PER_SECOND;
 /** 生成怪物时，离安全区边缘至少这么远，怪物之间至少隔这么远。 */
 const MONSTER_SAFE_ZONE_MARGIN = 6;
 const MONSTER_SPACING = 8;
+/** 拾取索引的小格边长，不能小于拾取半径。 */
+const DROP_CELL_SIZE = Math.max(2, PICKUP_RADIUS);
+/** 掉落物离尸体至少这么远，免得和尸体叠在一起看不清。 */
+const DROP_SCATTER_MIN = 0.5;
 
 /**
- * 权威的游戏世界：所有位置和血量都由这里计算，客户端只能提交“想去哪”和“想打谁”。
+ * 权威的游戏世界：所有位置、血量和物品都由这里计算，客户端只能提交“想去哪”“想打谁”“想用什么”。
  */
 export class World {
   readonly map: GameMap;
-  readonly stats: WorldStats = { pathfinds: 0, deferredPathfinds: 0, rejectedMoves: 0, hits: 0 };
+  readonly stats: WorldStats = {
+    pathfinds: 0,
+    deferredPathfinds: 0,
+    rejectedMoves: 0,
+    hits: 0,
+    dropped: 0,
+    pickedUp: 0,
+  };
   private readonly pathfinder: Pathfinder;
   /** 怪物用的寻路器：安全区里的格子在它眼里也是障碍。 */
   private readonly monsterPathfinder: Pathfinder;
   private readonly aoi: AoiGrid;
-  /** 所有实体，包括玩家和怪物。AOI 里的 id 都能在这里找到。 */
+  /** 所有实体，包括玩家、怪物和地上的物品。AOI 里的 id 都能在这里找到。 */
   private readonly entities = new Map<number, Entity>();
   private readonly players = new Map<number, Player>();
   private readonly monsters: Monster[] = [];
   private readonly monstersById = new Map<number, Monster>();
+  /** 地上的物品，按掉落的先后排列。存在时间是固定的，所以排在最前面的总是最先过期。 */
+  private readonly drops = new Map<number, Drop>();
+  private readonly dropGrid: DropGrid;
   private readonly ai: MonsterAi;
+  private readonly lootRandom: () => number;
   private readonly nearby: Player[] = [];
+  private readonly nearbyDrops: Drop[] = [];
   private pathQueue: Player[] = [];
   private nextId = 1;
   private tickCount = 0;
 
-  constructor(map: GameMap) {
+  /** lootRandom 决定掉什么、掉在哪，返回 [0, 1) 的随机数。测试里可以换成固定的序列。 */
+  constructor(map: GameMap, lootRandom: () => number = Math.random) {
     this.map = map;
+    this.lootRandom = lootRandom;
     this.pathfinder = new Pathfinder(map);
     this.monsterPathfinder = new Pathfinder(withSafeZoneBlocked(map));
     this.aoi = new AoiGrid(map.size, AOI_CELL_SIZE);
+    this.dropGrid = new DropGrid(map.size, DROP_CELL_SIZE);
     const host: AiHost = {
       pathfinder: this.monsterPathfinder,
       playersNear: (m) => this.playersNear(m),
@@ -134,9 +180,16 @@ export class World {
     return this.ai.pathfinds;
   }
 
+  /** 现在地上的物品堆数。 */
+  get dropCount(): number {
+    return this.drops.size;
+  }
+
   getPlayer(id: number): PlayerState | undefined {
     const p = this.players.get(id);
-    return p ? { name: p.name, x: p.x, z: p.z, moving: p.moving, hp: p.hp, dead: p.dead } : undefined;
+    return p
+      ? { name: p.name, x: p.x, z: p.z, moving: p.moving, hp: p.hp, dead: p.dead, items: { ...p.inventory } }
+      : undefined;
   }
 
   getMonster(id: number): MonsterState | undefined {
@@ -153,10 +206,10 @@ export class World {
   }
 
   /**
-   * 玩家进入世界。spawn 是存档里的位置，hp 是存档里的血量；
-   * 不传时在出生点附近随机一个位置、满血。
+   * 玩家进入世界。spawn、hp、items 是存档里的位置、血量和背包；
+   * 不传时在出生点附近随机一个位置、满血、空背包。
    */
-  join(name: string, conn: Connection, now: number, spawn?: Point, hp?: number): number {
+  join(name: string, conn: Connection, now: number, spawn?: Point, hp?: number, items?: Inventory): number {
     const id = this.nextId++;
     const pos = spawn ?? this.randomSpawn();
     const player: Player = {
@@ -181,10 +234,14 @@ export class World {
       // 刚上线也要等一段时间才开始回血，不能靠重新登录跳过等待。
       lastCombatAt: now,
       nextRegenAt: 0,
+      inventory: sanitizeInventory(items),
+      // 药水也一样，刚上线先走一轮冷却，不能靠重新登录连着喝。
+      nextPotionAt: now + POTION_COOLDOWN_MS,
     };
     this.players.set(id, player);
     this.entities.set(id, player);
     conn.send({ t: 'welcome', selfId: id, seed: this.map.seed, serverTime: now });
+    this.sendInventory(player);
     this.addToView(player);
     return id;
   }
@@ -231,6 +288,47 @@ export class World {
     if (!m || m.dead || !m.inWorld) return false;
     p.targetId = targetId;
     return true;
+  }
+
+  /**
+   * 玩家使用背包里的一个物品，返回是否用掉了。
+   * 现在只有治疗药水：活着、背包里有、冷却结束、没满血时才能喝。
+   */
+  useItem(id: number, item: ItemId, now: number): boolean {
+    const p = this.players.get(id);
+    if (!p || p.dead || !ITEMS[item].usable) return false;
+    if ((p.inventory[item] ?? 0) < 1) return false;
+    if (now < p.nextPotionAt || p.hp >= p.maxHp) return false;
+    const amount = Math.min(POTION_HEAL, p.maxHp - p.hp);
+    p.hp += amount;
+    p.nextPotionAt = now + POTION_COOLDOWN_MS;
+    addItem(p.inventory, item, -1);
+    this.sendInventory(p);
+    this.broadcastNear(p.id, { t: 'heal', id: p.id, amount });
+    return true;
+  }
+
+  /**
+   * 在 (x, z) 的地上放一堆物品，返回它的 id。
+   * 过一小会儿才能捡，没人捡的话到时间自己消失。
+   */
+  spawnDrop(item: ItemId, count: number, x: number, z: number, now: number): number {
+    const drop: Drop = {
+      kind: 'drop',
+      id: this.nextId++,
+      x: round2(x),
+      z: round2(z),
+      item,
+      count,
+      pickableAt: now + DROP_PICKUP_DELAY_MS,
+      expireAt: now + DROP_LIFETIME_MS,
+    };
+    this.drops.set(drop.id, drop);
+    this.dropGrid.add(drop);
+    this.entities.set(drop.id, drop);
+    this.stats.dropped++;
+    this.addToView(drop);
+    return drop.id;
   }
 
   /** 在 (x, z) 放一只怪物，这里也是它的出生位置。返回它的 id。 */
@@ -304,6 +402,7 @@ export class World {
         p.moving = stepMover(p, MOVE_SPEED * DT);
         this.afterMove(p);
       }
+      if (this.drops.size > 0) this.pickUpNearby(p, now);
       if (p.targetId !== 0) this.playerAttack(p, now);
       if (p.hp < p.maxHp && now - p.lastCombatAt >= REGEN_DELAY_MS && now >= p.nextRegenAt) {
         p.hp++;
@@ -311,6 +410,7 @@ export class World {
       }
     }
 
+    this.expireDrops(now);
     if (this.tickCount % SNAPSHOT_EVERY_TICKS === 0) this.sendSnapshots(now);
   }
 
@@ -367,26 +467,20 @@ export class World {
     this.dealDamage(p, m, PLAYER_ATTACK_DAMAGE, now);
   }
 
-  private dealDamage(attacker: Entity, target: Entity, amount: number, now: number): void {
+  private dealDamage(attacker: Character, target: Character, amount: number, now: number): void {
     if (target.dead) return;
     target.hp = Math.max(0, target.hp - amount);
     this.stats.hits++;
     if (attacker.kind === 'player') attacker.lastCombatAt = now;
     if (target.kind === 'player') target.lastCombatAt = now;
 
-    const cell = this.aoi.cellOf(target.id);
-    if (cell !== undefined) {
-      const msg: ServerMsg = { t: 'hit', from: attacker.id, to: target.id, damage: amount };
-      for (const c of this.aoi.neighbors(cell)) {
-        for (const id of this.aoi.idsIn(c)) this.players.get(id)?.conn.send(msg);
-      }
-    }
+    this.broadcastNear(target.id, { t: 'hit', from: attacker.id, to: target.id, damage: amount });
 
     if (target.kind === 'monster' && attacker.kind === 'player') this.ai.onDamaged(target, attacker);
     if (target.hp === 0) this.kill(target, now);
   }
 
-  private kill(e: Entity, now: number): void {
+  private kill(e: Character, now: number): void {
     e.dead = true;
     e.path = null;
     e.moving = false;
@@ -396,6 +490,7 @@ export class World {
       e.respawnAt = now + PLAYER_RESPAWN_MS;
     } else {
       this.ai.onDeath(e, now);
+      this.dropLoot(e, now);
     }
   }
 
@@ -414,7 +509,78 @@ export class World {
     this.addToView(p);
   }
 
+  // ---- 掉落和拾取 ----
+
+  /** 怪物死后掉东西：金币必掉，药水看运气。掉落谁都能捡，先到先得。 */
+  private dropLoot(m: Monster, now: number): void {
+    const gold = GOLD_DROP_MIN + Math.floor(this.lootRandom() * (GOLD_DROP_MAX - GOLD_DROP_MIN + 1));
+    // 两样东西落在尸体的两侧，不会叠在一起。
+    const angle = this.lootRandom() * Math.PI * 2;
+    this.scatterDrop('gold', gold, m, angle, now);
+    if (this.lootRandom() < POTION_DROP_CHANCE) this.scatterDrop('potion', 1, m, angle + Math.PI, now);
+  }
+
+  /** 把物品放在尸体旁边 angle 方向上。那里是墙或者被墙隔开时，就放在尸体的位置。 */
+  private scatterDrop(item: ItemId, count: number, m: Monster, angle: number, now: number): void {
+    const r = DROP_SCATTER_MIN + this.lootRandom() * (DROP_SCATTER_RADIUS - DROP_SCATTER_MIN);
+    let x = m.x + Math.cos(angle) * r;
+    let z = m.z + Math.sin(angle) * r;
+    if (!isWalkable(this.map, x, z) || !this.pathfinder.lineOfSight(m.x, m.z, x, z)) {
+      x = m.x;
+      z = m.z;
+    }
+    this.spawnDrop(item, count, x, z, now);
+  }
+
+  /**
+   * 活着的玩家自动捡起脚边的物品。
+   * 这种物品带满了就留在地上；隔着墙也捡不到。
+   */
+  private pickUpNearby(p: Player, now: number): void {
+    const near = this.dropGrid.near(p.x, p.z, this.nearbyDrops);
+    let changed = false;
+    for (const drop of near) {
+      if (now < drop.pickableAt) continue;
+      if (Math.hypot(drop.x - p.x, drop.z - p.z) > PICKUP_RADIUS) continue;
+      if ((p.inventory[drop.item] ?? 0) + drop.count > ITEMS[drop.item].maxCount) continue;
+      if (!this.pathfinder.lineOfSight(p.x, p.z, drop.x, drop.z)) continue;
+      this.removeDrop(drop);
+      addItem(p.inventory, drop.item, drop.count);
+      this.stats.pickedUp++;
+      changed = true;
+    }
+    if (changed) this.sendInventory(p);
+  }
+
+  private expireDrops(now: number): void {
+    for (const drop of this.drops.values()) {
+      if (drop.expireAt > now) break;
+      this.removeDrop(drop);
+    }
+  }
+
+  /** 物品从地上消失（被捡走或过期），看得到它的玩家收到 leave。 */
+  private removeDrop(drop: Drop): void {
+    this.removeFromView(drop, false);
+    this.drops.delete(drop.id);
+    this.dropGrid.remove(drop);
+    this.entities.delete(drop.id);
+  }
+
+  private sendInventory(p: Player): void {
+    p.conn.send({ t: 'inv', items: { ...p.inventory } });
+  }
+
   // ---- 视野 ----
+
+  /** 把消息发给能看到实体 id 的所有玩家（它自己是玩家的话也包括在内）。 */
+  private broadcastNear(id: number, msg: ServerMsg): void {
+    const cell = this.aoi.cellOf(id);
+    if (cell === undefined) return;
+    for (const c of this.aoi.neighbors(cell)) {
+      for (const otherId of this.aoi.idsIn(c)) this.players.get(otherId)?.conn.send(msg);
+    }
+  }
 
   private playersNear(m: Monster): readonly Player[] {
     const out = this.nearby;
@@ -464,13 +630,13 @@ export class World {
   }
 
   /** 实体移动之后更新 AOI，跨格时通知视野的变化。 */
-  private afterMove(e: Entity): void {
+  private afterMove(e: Character): void {
     const change = this.aoi.move(e.id, e.x, e.z);
     if (change) this.onCellChange(e, change);
   }
 
   /** 实体跨格后，和新进入、离开视野的实体互相通知。 */
-  private onCellChange(e: Entity, change: CellChange): void {
+  private onCellChange(e: Character, change: CellChange): void {
     if (change.entered.length > 0) {
       const selfEnter: ServerMsg = { t: 'enter', entities: [info(e)] };
       const entered: EntityInfo[] = [];
@@ -500,7 +666,8 @@ export class World {
   }
 
   /**
-   * 给每个玩家下发视野内所有实体（包括自己）的位置、状态和血量。
+   * 给每个玩家下发视野内所有玩家和怪物（包括自己）的位置、状态和血量。
+   * 地上的物品不会动，进出视野时已经通知过，不放进快照。
    * 同一个格子里的玩家视野相同，所以每个格子只组装一次消息，发送端也只序列化一次。
    */
   private sendSnapshots(now: number): void {
@@ -513,6 +680,7 @@ export class World {
         list = [];
         for (const id of this.aoi.idsIn(cell)) {
           const e = this.entities.get(id) as Entity;
+          if (e.kind === 'drop') continue;
           list.push([e.id, round2(e.x), round2(e.z), stateOf(e), e.hp]);
         }
         cellEntities.set(cell, list);
@@ -570,11 +738,19 @@ function withSafeZoneBlocked(map: GameMap): GameMap {
   return { ...map, blocked };
 }
 
-function stateOf(e: Entity): EntityState {
+function stateOf(e: Character): EntityState {
   return e.dead ? STATE_DEAD : e.moving ? STATE_MOVING : STATE_IDLE;
 }
 
+/** 背包里某种物品的数量加上 delta；减到 0 就从背包里去掉。 */
+function addItem(inventory: Inventory, item: ItemId, delta: number): void {
+  const count = (inventory[item] ?? 0) + delta;
+  if (count > 0) inventory[item] = count;
+  else delete inventory[item];
+}
+
 function info(e: Entity): EntityInfo {
+  if (e.kind === 'drop') return { id: e.id, kind: 'drop', x: e.x, z: e.z, item: e.item, count: e.count };
   return {
     id: e.id,
     kind: e.kind,

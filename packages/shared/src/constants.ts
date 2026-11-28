@@ -79,6 +79,25 @@ export const MONSTER_THINK_MS = 200;
 /** 每个 tick 所有怪物加起来最多寻路几次，和玩家的寻路上限分开算。 */
 export const MAX_MONSTER_PATHFINDS_PER_TICK = 8;
 
+// ---- 掉落和物品 ----
+
+/** 玩家离地上的物品这么近就自动捡起来。 */
+export const PICKUP_RADIUS = 1.2;
+/** 物品落地后过这么久才能捡，让人看得到它掉出来。 */
+export const DROP_PICKUP_DELAY_MS = 600;
+/** 地上的物品没人捡，过这么久消失。 */
+export const DROP_LIFETIME_MS = 60000;
+/** 物品落在怪物尸体周围这个半径内的随机位置。 */
+export const DROP_SCATTER_RADIUS = 1.2;
+/** 每只怪物必掉的金币数量范围（含两端）。 */
+export const GOLD_DROP_MIN = 3;
+export const GOLD_DROP_MAX = 8;
+/** 怪物掉落治疗药水的概率。 */
+export const POTION_DROP_CHANCE = 0.25;
+/** 一瓶治疗药水回复的血量，以及两次喝药之间的最短间隔。 */
+export const POTION_HEAL = 40;
+export const POTION_COOLDOWN_MS = 5000;
+
 export const MAX_NAME_LENGTH = 16;
 export const SERVER_PORT = 8080;
 export const WS_PATH = '/ws';

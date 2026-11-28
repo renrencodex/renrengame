@@ -15,6 +15,7 @@ describe('protocol', () => {
     expect(decodeClientMsg(encode({ t: 'ping', c: 42 }))).toEqual({ t: 'ping', c: 42 });
     expect(decodeClientMsg(encode({ t: 'target', id: 17 }))).toEqual({ t: 'target', id: 17 });
     expect(decodeClientMsg(encode({ t: 'target', id: 0 }))).toEqual({ t: 'target', id: 0 });
+    expect(decodeClientMsg(encode({ t: 'use', item: 'potion' }))).toEqual({ t: 'use', item: 'potion' });
   });
 
   it('拒绝格式不对的客户端消息', () => {
@@ -39,6 +40,10 @@ describe('protocol', () => {
       '{"t":"target","id":-1}',
       '{"t":"target","id":1.5}',
       '{"t":"target","id":1e30}',
+      '{"t":"use"}',
+      '{"t":"use","item":"sword"}',
+      '{"t":"use","item":"toString"}',
+      '{"t":"use","item":1}',
     ]) {
       expect(decodeClientMsg(raw), raw).toBeNull();
     }
