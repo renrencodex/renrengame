@@ -20,6 +20,7 @@ import { Game } from './game';
 import { Hud } from './hud';
 import { Net } from './net';
 import { SoundPlayer } from './sound';
+import { loadLandscapeTextures } from './terrain';
 
 /**
  * 遮罩层的三种状态：
@@ -54,10 +55,10 @@ let busy = false;
 let session: AuthSuccess | null = loadSession();
 let assetsPromise: ReturnType<typeof loadAssets> | null = null;
 
-/** 人物和物品的模型一起加载。哪个加载失败，哪个就用简单的形状代替，不影响进入游戏。 */
+/** 模型与场景材质一起加载，缺少一项时用对应的默认样式。 */
 async function loadAssets() {
-  const [characters, items] = await Promise.all([loadCharacterAssets(), loadItemAssets()]);
-  return { characters, items };
+  const [characters, items, landscape] = await Promise.all([loadCharacterAssets(), loadItemAssets(), loadLandscapeTextures()]);
+  return { characters, items, landscape };
 }
 
 show(session ? 'resume' : 'login');
@@ -137,7 +138,7 @@ async function enterWorld(): Promise<void> {
   if (!session) return;
   const token = session.token;
   setBusy(true);
-  message.textContent = '正在加载模型…';
+  message.textContent = '正在加载场景…';
   assetsPromise ??= loadAssets();
   const assets = await assetsPromise;
 
@@ -152,7 +153,7 @@ async function enterWorld(): Promise<void> {
       return;
     }
     try {
-      game = new Game(app, net, hud, sound, assets.characters, assets.items, msg.selfId, msg.seed);
+      game = new Game(app, net, hud, sound, assets.characters, assets.items, assets.landscape, msg.selfId, msg.seed);
       overlay.hidden = true;
     } catch (err) {
       console.error(err);

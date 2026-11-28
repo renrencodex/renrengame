@@ -40,11 +40,13 @@ import { LocalPlayer } from './localPlayer';
 import type { Net } from './net';
 import { pickEntity, screenPickCandidate } from './picking';
 import type { PickCandidate } from './picking';
+import { RenderQuality } from './renderQuality';
 import { WorldScene } from './scene';
 import { distanceVolume, inventorySound } from './sound';
 import type { SoundPlayer } from './sound';
 import type { SoundId } from './synth';
 import { Targeting } from './targeting';
+import type { LandscapeTextures } from './terrain';
 
 /** 视野里除自己以外的一个实体（其他玩家或怪物）。 */
 interface Remote {
@@ -88,6 +90,7 @@ export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly labels: CSS2DRenderer;
   private readonly world: WorldScene;
+  private readonly quality = new RenderQuality();
   private readonly rig: CameraRig;
   private readonly input: Input;
   private readonly local: LocalPlayer;
@@ -127,6 +130,7 @@ export class Game {
     private readonly sound: SoundPlayer,
     private readonly assets: CharacterAssets | null,
     private readonly itemAssets: ItemAssets,
+    landscape: LandscapeTextures,
     private readonly selfId: number,
     seed: number,
   ) {
@@ -135,7 +139,7 @@ export class Game {
     this.local = new LocalPlayer(map);
     const pathfinder = new Pathfinder(map);
     this.targeting = new Targeting((ax, az, bx, bz) => pathfinder.lineOfSight(ax, az, bx, bz));
-    this.world = new WorldScene(map);
+    this.world = new WorldScene(map, landscape);
     this.world.scene.add(this.marker.mesh, this.ring.mesh);
     this.floating = new FloatingTexts(this.world.scene);
 
@@ -154,6 +158,7 @@ export class Game {
     // WebGL 不可用时这里会抛出异常，由调用方提示用户。
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     container.appendChild(this.renderer.domElement);
@@ -630,6 +635,11 @@ export class Game {
     const dt = Math.min(0.1, (now - this.lastFrameAt) / 1000);
     this.lastFrameAt = now;
 
+    if (this.quality.update(now, document.visibilityState === 'visible')) {
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25) * 0.76);
+      this.world.reduceDetail();
+    }
+
     this.input.update(now);
 
     if (this.selfDead) {
@@ -663,6 +673,7 @@ export class Game {
     this.floating.update(dt);
     this.rig.update(this.local.x, this.local.z, dt);
     this.world.followSun(this.local.x, this.local.z);
+    this.world.update(this.rig.camera, now / 1000);
 
     this.renderer.render(this.world.scene, this.rig.camera);
     this.labels.render(this.world.scene, this.rig.camera);

@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { merchantPosition, SAFE_ZONE_RADIUS } from '@mmo/shared';
 import type { GameMap } from '@mmo/shared';
 import { createLandscape } from './landscape';
+import type { LandscapeTextures } from './terrain';
 
-const SKY_COLOR = 0xa8c8e8;
+const SKY_COLOR = 0xacbeb6;
 /** 雾从离镜头这么远的地方开始，到这么远时完全盖住。按宽屏下镜头的默认远近定的。 */
-const FOG_NEAR = 40;
-const FOG_FAR = 180;
+const FOG_NEAR = 37;
+const FOG_FAR = 155;
 /** 阴影只覆盖玩家周围这么大的范围，跟着玩家移动。 */
 const SHADOW_RANGE = 45;
 const SUN_OFFSET = new THREE.Vector3(-35, 60, 25);
@@ -16,16 +17,17 @@ const MERCHANT_RUG_RADIUS = 1.3;
 export class WorldScene {
   readonly scene = new THREE.Scene();
   private readonly sun: THREE.DirectionalLight;
+  private readonly landscape: ReturnType<typeof createLandscape>;
   private readonly fog = new THREE.Fog(SKY_COLOR, FOG_NEAR, FOG_FAR);
 
-  constructor(map: GameMap) {
+  constructor(map: GameMap, textures: LandscapeTextures) {
     const scene = this.scene;
     scene.background = new THREE.Color(SKY_COLOR);
     scene.fog = this.fog;
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x5a6b4a, 1.3));
+    scene.add(new THREE.HemisphereLight(0xe8f2ff, 0x626e5c, 1.20));
 
-    const sun = new THREE.DirectionalLight(0xfff1dc, 2.2);
+    const sun = new THREE.DirectionalLight(0xffe7c1, 1.95);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
     sun.shadow.camera.left = -SHADOW_RANGE;
@@ -36,16 +38,30 @@ export class WorldScene {
     sun.shadow.camera.far = 200;
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.03;
+    sun.shadow.radius = 1.65;
     scene.add(sun, sun.target);
     this.sun = sun;
 
+    this.landscape = createLandscape(map, textures);
     scene.add(
-      createLandscape(map),
+      this.landscape.group,
       createSurroundings(map.size),
       createSafeZoneRing(map.size),
       createMerchantRug(map.size),
     );
     this.followSun(map.size / 2, map.size / 2);
+  }
+
+  update(camera: THREE.Camera, seconds: number): void {
+    this.landscape.update(camera, seconds);
+  }
+
+  reduceDetail(): void {
+    this.landscape.reduceDetail();
+    const shadow = this.sun.shadow;
+    shadow.map?.dispose();
+    shadow.map = null;
+    shadow.mapSize.set(1024, 1024);
   }
 
   /**
