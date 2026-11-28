@@ -21,7 +21,8 @@ const MIX: Record<SoundId, { gain: number; jitter: number }> = {
   monsterDeath: { gain: 0.6, jitter: 0.1 },
   playerDeath: { gain: 0.6, jitter: 0 },
   respawn: { gain: 0.5, jitter: 0 },
-  coin: { gain: 0.45, jitter: 0.03 },
+  // 金币的声音很短、很尖，同样的幅度听起来比一声长音轻得多，所以比别的捡东西的声音开得大。
+  coin: { gain: 0.7, jitter: 0.03 },
   pickup: { gain: 0.45, jitter: 0.03 },
   drink: { gain: 0.5, jitter: 0 },
   equip: { gain: 0.45, jitter: 0.03 },

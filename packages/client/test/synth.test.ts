@@ -19,6 +19,32 @@ function crossingsPerSecond(samples: Float32Array, rate: number): number {
   return (crossings * rate) / samples.length;
 }
 
+/** 声音里 hz 这个频率有多强（加了窗，旁边的频率漏不过来）。 */
+function powerAt(samples: Float32Array, rate: number, hz: number): number {
+  const w = (2 * Math.PI * hz) / rate;
+  let re = 0;
+  let im = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const v = samples[i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (samples.length - 1)));
+    re += v * Math.cos(w * i);
+    im += v * Math.sin(w * i);
+  }
+  return re * re + im * im;
+}
+
+/** 声音里最突出的几个频率（赫兹），从低到高。比最强的那个弱 20 分贝以上的不算。 */
+function strongestFrequencies(samples: Float32Array, rate: number): number[] {
+  const STEP = 20;
+  const powers: number[] = [];
+  for (let hz = 500; hz <= 12000; hz += STEP) powers.push(powerAt(samples, rate, hz));
+  const top = Math.max(...powers);
+  const peaks: number[] = [];
+  for (let i = 1; i < powers.length - 1; i++) {
+    if (powers[i] > top / 100 && powers[i] > powers[i - 1] && powers[i] >= powers[i + 1]) peaks.push(500 + i * STEP);
+  }
+  return peaks;
+}
+
 /** 声音里最响的那一刻在第几秒。 */
 function loudestAt(samples: Float32Array, rate: number): number {
   let at = 0;
@@ -69,6 +95,35 @@ describe('renderSound', () => {
     for (const id of ['coin', 'trade', 'equip'] as const) expect(rate(id)).toBeGreaterThan(2000);
     // 最清脆的和最低沉的差得很远。
     expect(rate('trade')).toBeGreaterThan(rate('step') * 4);
+  });
+
+  it('金币是金属的声音：很尖，几个泛音之间不成整数倍', () => {
+    const samples = renderSound('coin', RATE);
+    // 比别的捡东西的声音尖得多。
+    expect(crossingsPerSecond(samples, RATE)).toBeGreaterThan(crossingsPerSecond(renderSound('pickup', RATE), RATE) * 2);
+
+    // 只看第二下刚响起来的那一小段。整段一起看的话，余音里每个频率都窄得像一根针，隔 20 赫兹看一眼会漏掉。
+    const peaks = strongestFrequencies(samples.subarray(Math.round(0.08 * RATE), Math.round(0.14 * RATE)), RATE);
+    expect(peaks.length).toBeGreaterThanOrEqual(3);
+    // 泛音是基音的 2 倍、3 倍的话听起来是笛子、铃声那样的“叮”，对不上才有金属的味道。
+    const base = peaks[0];
+    const offBeat = peaks.filter((hz) => {
+      const ratio = hz / base;
+      return Math.abs(ratio - Math.round(ratio)) > 0.15;
+    });
+    expect(offBeat.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('金币一上来就响（有撞击的那一下），不是慢慢响起来的', () => {
+    expect(loudestAt(renderSound('coin', RATE), RATE)).toBeLessThan(0.1);
+    // 磕了两下：第二下开始的时候比它前面那一小段响。
+    const samples = renderSound('coin', RATE);
+    const loudness = (from: number, to: number) => {
+      let sum = 0;
+      for (let i = Math.round(from * RATE); i < Math.round(to * RATE); i++) sum += samples[i] * samples[i];
+      return sum / ((to - from) * RATE);
+    };
+    expect(loudness(0.075, 0.095)).toBeGreaterThan(loudness(0.05, 0.07) * 2);
   });
 
   it('拳头一上来就是最响的；挥剑先有风声，砍中在后面', () => {

@@ -75,6 +75,33 @@ function jingle(notes: number[], gap: number): Layer[] {
   ]);
 }
 
+/**
+ * 一枚硬币磕了一下。听起来是金属而不是“叮”的一声，靠的是三样：
+ * 泛音不是基音的整数倍（用的是圆片振动的比例）；主要的两个音旁边各有一个只差一点点的音，
+ * 叠在一起会微微颤动；最前面有一下很短的撞击声。越高的泛音消失得越快。
+ * ring 是基音的余音有多长（Shape 里的 decay）。
+ */
+function clink(at: number, hz: number, ring: number, gain: number): Layer[] {
+  const partial = (ratio: number, level: number, length: number): Layer => ({
+    type: 'sine',
+    from: hz * ratio,
+    at,
+    duration: ring * length * 4.5,
+    attack: 0.001,
+    decay: ring * length,
+    gain: gain * level,
+  });
+  return [
+    { type: 'noise', pass: 'high', from: 6000, at, duration: 0.008, attack: 0.0005, decay: 0.002, gain: gain * 0.4 },
+    partial(1, 0.5, 1),
+    partial(1.007, 0.25, 1),
+    partial(1.73, 0.4, 0.7),
+    partial(1.73 * 1.009, 0.2, 0.7),
+    partial(2.33, 0.3, 0.5),
+    partial(3.91, 0.15, 0.3),
+  ];
+}
+
 /** 一串音符，一个接一个地响起，前一个还没消失后一个就进来。 */
 function arpeggio(type: Tone['type'], notes: number[], gap: number, shape: Omit<Shape, 'at'>): Layer[] {
   return notes.map((hz, i): Layer => ({ ...shape, type, from: hz, at: i * gap }));
@@ -125,13 +152,8 @@ const RECIPES: Record<SoundId, Layer[]> = {
     ...arpeggio('sine', [1047, 1319, 1568, 2093], 0.08, { duration: 0.4, attack: 0.008, decay: 0.1, gain: 0.12 }),
     { type: 'noise', pass: 'high', from: 5000, duration: 0.5, attack: 0.2, decay: 0.15, gain: 0.05 },
   ],
-  // 捡到金币：一低一高两声清脆的“叮”。
-  coin: [
-    { type: 'sine', from: 988, duration: 0.08, decay: 0.05, gain: 0.7 },
-    { type: 'sine', from: 2964, duration: 0.08, decay: 0.03, gain: 0.15 },
-    { type: 'sine', from: 1319, at: 0.07, duration: 0.35, decay: 0.1, gain: 0.8 },
-    { type: 'sine', from: 3957, at: 0.07, duration: 0.3, decay: 0.06, gain: 0.12 },
-  ],
+  // 捡到金币：硬币落进钱袋，磕了两下。第一下短，第二下高一些、余音长一些。
+  coin: [...clink(0, 2640, 0.05, 0.7), ...clink(0.075, 3520, 0.11, 1)],
   // 捡到别的东西：往上滑的一声“啵”。
   pickup: [
     { type: 'sine', from: 420, to: 880, duration: 0.11, attack: 0.005, decay: 0.06, gain: 0.8 },
@@ -183,10 +205,11 @@ const RECIPES: Record<SoundId, Layer[]> = {
  */
 export function renderSound(id: SoundId, sampleRate: number): Float32Array<ArrayBuffer> {
   const layers = RECIPES[id];
-  let seconds = 0;
-  for (const layer of layers) seconds = Math.max(seconds, (layer.at ?? 0) + layer.duration);
+  // 每一层占哪些采样要和 addLayer 里算得一模一样：分开取整的话，起点和长度各进一位，最后一层会多出一个采样。
+  let end = 0;
+  for (const layer of layers) end = Math.max(end, layerStart(layer, sampleRate) + layerLength(layer, sampleRate));
   // 多留一个采样，保证最后一个一定是 0。
-  const out = new Float32Array(Math.ceil(seconds * sampleRate) + 1);
+  const out = new Float32Array(end + 1);
   const random = mulberry32(0x5eed + SOUND_IDS.indexOf(id));
   for (const layer of layers) addLayer(out, sampleRate, layer, random);
 
@@ -199,8 +222,16 @@ export function renderSound(id: SoundId, sampleRate: number): Float32Array<Array
   return out;
 }
 
+function layerStart(layer: Layer, rate: number): number {
+  return Math.round((layer.at ?? 0) * rate);
+}
+
+function layerLength(layer: Layer, rate: number): number {
+  return Math.max(1, Math.round(layer.duration * rate));
+}
+
 function addLayer(out: Float32Array, rate: number, layer: Layer, random: () => number): void {
-  const n = Math.max(1, Math.round(layer.duration * rate));
+  const n = layerLength(layer, rate);
   const raw = new Float32Array(n);
   if (layer.type === 'noise') {
     for (let i = 0; i < n; i++) raw[i] = random() * 2 - 1;
@@ -215,7 +246,7 @@ function addLayer(out: Float32Array, rate: number, layer: Layer, random: () => n
   for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(raw[i]));
   if (peak === 0) return;
 
-  const start = Math.round((layer.at ?? 0) * rate);
+  const start = layerStart(layer, rate);
   const attack = layer.attack ?? DEFAULT_ATTACK;
   const scale = layer.gain / peak;
   // 每个采样乘一次，比每次都算指数快得多；这些循环加起来要跑几十万次。
