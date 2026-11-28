@@ -19,6 +19,7 @@ const UPDATE_MS = 500;
 /**
  * 左上角的状态栏：自己的血条、金币、药水、背包，以及延迟、视野内数量、坐标、帧率；还有屏幕中间的提示。
  * 药水是一个按钮，点它和按数字键 1 一样；背包按钮（或者 B 键）打开下面的背包面板。
+ * 所有操作都有按钮，没有键盘的手机也能用；按钮在触摸屏上的大小由 style.css 里的 (pointer: coarse) 决定。
  * 商店面板也在这里，什么时候打开、关上由 Game 决定（走到商人跟前、走远了）。
  */
 export class Hud {
@@ -101,8 +102,21 @@ export class Hud {
     this.shop.onSell = (item, count) => this.onSell?.(item, count);
     this.shop.onClose = () => this.closeShop();
 
-    el.replaceChildren(bar, items, this.bag.element, this.shop.element, this.status);
+    // 两个面板放在同一个容器里：平时上下排，手机横屏时屏幕不够高，改成左右排（见 style.css）。
+    const panels = document.createElement('div');
+    panels.className = 'hud-panels';
+    panels.append(this.bag.element, this.shop.element);
+
+    el.replaceChildren(bar, items, panels, this.status);
     this.setInventory({}, null);
+  }
+
+  /**
+   * 有面板开着时给状态栏加上 panel-open：这时整块都拦住点击（点偏了不会让角色走开），
+   * 内容比屏幕高时可以上下滑。
+   */
+  private syncPanels(): void {
+    this.el.classList.toggle('panel-open', this.bag.open || this.shop.open);
   }
 
   show(): void {
@@ -132,6 +146,7 @@ export class Hud {
     this.bag.toggle();
     this.bagButton.classList.toggle('open', this.bag.open);
     if (this.bag.open) this.bagButton.classList.remove('notice');
+    this.syncPanels();
   }
 
   get shopOpen(): boolean {
@@ -140,10 +155,12 @@ export class Hud {
 
   openShop(): void {
     this.shop.show();
+    this.syncPanels();
   }
 
   closeShop(): void {
     this.shop.hide();
+    this.syncPanels();
   }
 
   /** 药水进入冷却，到 readyAt（本地时间）结束。 */

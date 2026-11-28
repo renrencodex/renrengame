@@ -3,6 +3,9 @@ import { merchantPosition, mulberry32, SAFE_ZONE_RADIUS } from '@mmo/shared';
 import type { GameMap } from '@mmo/shared';
 
 const SKY_COLOR = 0xa8c8e8;
+/** 雾从离镜头这么远的地方开始，到这么远时完全盖住。按宽屏下镜头的默认远近定的。 */
+const FOG_NEAR = 40;
+const FOG_FAR = 180;
 /** 阴影只覆盖玩家周围这么大的范围，跟着玩家移动。 */
 const SHADOW_RANGE = 45;
 const SUN_OFFSET = new THREE.Vector3(-35, 60, 25);
@@ -16,11 +19,12 @@ const MERCHANT_RUG_RADIUS = 1.3;
 export class WorldScene {
   readonly scene = new THREE.Scene();
   private readonly sun: THREE.DirectionalLight;
+  private readonly fog = new THREE.Fog(SKY_COLOR, FOG_NEAR, FOG_FAR);
 
   constructor(map: GameMap) {
     const scene = this.scene;
     scene.background = new THREE.Color(SKY_COLOR);
-    scene.fog = new THREE.Fog(SKY_COLOR, 40, 180);
+    scene.fog = this.fog;
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x5a6b4a, 1.3));
 
@@ -46,6 +50,15 @@ export class WorldScene {
       createMerchantRug(map.size),
     );
     this.followSun(map.size / 2, map.size / 2);
+  }
+
+  /**
+   * 竖屏时镜头会按比例拉远（CameraRig.viewScale），雾也要跟着变远，
+   * 不然镜头一拉远，整个画面就都罩在雾里了。
+   */
+  setViewScale(scale: number): void {
+    this.fog.near = FOG_NEAR * scale;
+    this.fog.far = FOG_FAR * scale;
   }
 
   /** 让平行光和它的阴影范围跟着玩家走。 */

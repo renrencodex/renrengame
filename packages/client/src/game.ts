@@ -154,6 +154,7 @@ export class Game {
       this.rig.camera,
       (x, z) => this.onMoveInput(x, z),
       (px, py) => this.onPick(px, py),
+      (factor) => this.rig.zoomBy(factor),
     );
 
     // 刚进入世界时，服务器那边药水先走一轮冷却。
@@ -547,6 +548,7 @@ export class Game {
     this.renderer.setSize(width, height);
     this.labels.setSize(width, height);
     this.rig.resize(width / height);
+    this.world.setViewScale(this.rig.viewScale);
   };
 
   private readonly frame = (): void => {

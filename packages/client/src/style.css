@@ -157,6 +157,11 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-sizing: border-box;
+  /* 不超出屏幕：小屏幕上内容太多时，面板开着就能上下滑（见下面的 .panel-open）。 */
+  max-width: calc(100vw - 20px);
+  max-height: calc(100vh - 20px);
+  max-height: calc(100dvh - 20px);
   padding: 8px 10px;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.5);
@@ -165,6 +170,23 @@ body {
   font-variant-numeric: tabular-nums;
   pointer-events: none;
   user-select: none;
+}
+
+/* 高度不够时让整块滚动，而不是把血条这些压扁。 */
+#hud > * {
+  flex-shrink: 0;
+}
+
+/*
+ * 背包或商店开着的时候，整块都拦住点击：手指点偏到按钮旁边，不会穿过去让角色走开
+ * （走远了商店还会自己关上）。没开面板时只有按钮那一行拦，其余地方照样可以点地面。
+ */
+#hud.panel-open {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  touch-action: pan-y;
 }
 
 #hud[hidden],
@@ -198,10 +220,24 @@ body {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 
+/* 只占按钮那么宽，按钮之间的空隙也算在内，点在空隙上不会让角色走。 */
 .hud-items {
   display: flex;
   align-items: center;
+  align-self: flex-start;
   gap: 8px;
+  pointer-events: auto;
+}
+
+/* 背包和商店的容器：平时上下排。没有面板开着时不占地方。 */
+.hud-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#hud:not(.panel-open) .hud-panels {
+  display: none;
 }
 
 .hud-gold,
@@ -280,7 +316,6 @@ body {
   font-weight: 600;
 }
 
-/* 整个状态栏不拦截鼠标，只有按钮和背包面板可以点。 */
 .hud-button {
   position: relative;
   overflow: hidden;
@@ -291,16 +326,8 @@ body {
   touch-action: manipulation;
 }
 
-.hud-button:hover {
-  background: rgba(70, 70, 70, 0.6);
-}
-
 .hud-potion {
   outline-color: rgba(255, 140, 140, 0.45);
-}
-
-.hud-potion:hover {
-  background: rgba(60, 10, 10, 0.6);
 }
 
 .hud-potion.empty,
@@ -408,11 +435,6 @@ button.bag-row {
   touch-action: manipulation;
 }
 
-button.bag-row:hover:not(:disabled) {
-  outline-color: rgba(255, 255, 255, 0.5);
-  background: rgba(70, 70, 70, 0.6);
-}
-
 .bag-row.gold .bag-name,
 .bag-row.gold .bag-count {
   color: #ffd95a;
@@ -491,12 +513,34 @@ button.bag-row:hover:not(:disabled) {
 .shop-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
 }
 
 .shop-title {
+  margin-right: auto;
   color: #e9c8ff;
   font-weight: 600;
+}
+
+/* “一次 1 个 / 一次 5 个”的开关，亮着的时候是 5 个。 */
+.shop-bulk {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  outline: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.shop-bulk.on {
+  outline-color: #ffd95a;
+  background: rgba(255, 217, 90, 0.22);
+  color: #ffd95a;
 }
 
 .shop-close {
@@ -512,10 +556,6 @@ button.bag-row:hover:not(:disabled) {
   line-height: 22px;
   cursor: pointer;
   touch-action: manipulation;
-}
-
-.shop-close:hover {
-  background: rgba(255, 255, 255, 0.28);
 }
 
 .shop-price {
@@ -553,6 +593,109 @@ button.bag-row:hover:not(:disabled) {
 .shop-hint {
   color: rgba(255, 255, 255, 0.45);
   font-size: 11px;
+}
+
+/* ---- 状态栏和面板在不同设备上的调整 ---- */
+
+/* 悬停的高亮只给鼠标：触摸屏上点过之后它会一直亮着，看起来像被选中了。 */
+@media (hover: hover) {
+  .hud-button:hover {
+    background: rgba(70, 70, 70, 0.6);
+  }
+
+  .hud-potion:hover {
+    background: rgba(60, 10, 10, 0.6);
+  }
+
+  button.bag-row:hover:not(:disabled) {
+    outline-color: rgba(255, 255, 255, 0.5);
+    background: rgba(70, 70, 70, 0.6);
+  }
+
+  .shop-bulk:not(.on):hover,
+  .shop-close:hover {
+    background: rgba(255, 255, 255, 0.28);
+  }
+}
+
+/* 触摸屏：按钮放大到手指点得准的大小，键盘相关的提示不显示。 */
+@media (pointer: coarse) {
+  .hud-gold,
+  .hud-button {
+    height: 40px;
+    padding: 0 12px;
+    font-size: 15px;
+  }
+
+  .hud-key,
+  .shop-hint {
+    display: none;
+  }
+
+  .bag,
+  .shop {
+    width: 280px;
+    max-width: calc(100vw - 40px);
+  }
+
+  .bag-list {
+    gap: 6px;
+  }
+
+  .bag-row {
+    min-height: 42px;
+    font-size: 15px;
+  }
+
+  .bag-action {
+    padding: 2px 8px;
+    font-size: 13px;
+  }
+
+  .shop-bulk {
+    height: 36px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .shop-close {
+    width: 36px;
+    height: 36px;
+    font-size: 20px;
+    line-height: 36px;
+  }
+}
+
+/*
+ * 窄屏（手机竖屏）：最下面那行状态文字很长，不让它把整个状态栏撑到和屏幕一样宽，
+ * 而是跟着血条、面板的宽度换行。width: 0 让它不参与算宽度，min-width 再把它拉回到实际的宽度。
+ */
+@media (max-width: 600px) {
+  .hud-status {
+    width: 0;
+    min-width: 100%;
+  }
+}
+
+/* 手机横屏：屏幕不够高，背包和商店改成左右排，面板开着时不显示状态文字。 */
+@media (orientation: landscape) and (max-height: 520px) {
+  .hud-panels {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .bag:not([hidden]) + .shop {
+    margin-top: 0;
+    padding-top: 2px;
+    padding-left: 12px;
+    border-top: 0;
+    border-left: 1px solid rgba(255, 255, 255, 0.18);
+  }
+
+  #hud.panel-open .hud-status {
+    display: none;
+  }
 }
 
 #banner {

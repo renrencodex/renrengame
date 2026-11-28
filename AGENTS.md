@@ -30,7 +30,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 
 1. 每次都跑 `pnpm typecheck` 和 `pnpm test`。
 2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。机器人会打怪、捡东西、捡到武器就装备、攒够金币去找商人，“命中”和“拾取”应该大于 0（剑掉得少，“装备武器”可能是 0）；机器人很多时它们几乎不会死，也不喝药水，分到的金币也不够买东西，这些要用很少的机器人（`--count 30 --duration 60`）、单测或者自己进游戏验证。
-3. 改了客户端的画面或交互，单测覆盖不到。可以用无头 Chromium 打开页面检查，启动参数加 `--use-angle=swiftshader --enable-unsafe-swiftshader` 才有 WebGL。做不了就在回复里明确说画面没有验证过。
+3. 改了客户端的画面或交互，单测覆盖不到。可以用无头 Chromium 打开页面检查，启动参数加 `--use-angle=swiftshader --enable-unsafe-swiftshader` 才有 WebGL。做不了就在回复里明确说画面没有验证过。改了状态栏、面板或输入，还要用手机的尺寸再看一遍（Playwright 的 `isMobile: true, hasTouch: true`，竖屏 390×844 和横屏 844×390）；双指要用 CDP 的 `Input.dispatchTouchEvent` 发两个触点。
 
 新增逻辑时把测试放在对应包的 `test/` 目录，文件名以 `.test.ts` 结尾。
 
@@ -106,6 +106,14 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 密码只存 scrypt 哈希，Redis 里只存会话令牌的哈希。不要把密码、令牌或连接串写进日志或错误信息。
 - Redis 的键都要带 `redis.ts` 里的 `KEY_PREFIX`。
 - 返回给客户端的错误信息不要包含内部细节，细节写服务器日志。
+
+**手机和触摸**
+
+- 鼠标和触摸走的是同一套指针事件。哪些算“按下”、哪些算“双指缩放”由 `client/src/gestures.ts` 的 `PointerGestures` 判断，它不碰 DOM，有单测。触摸的按下会晚 `TOUCH_PRESS_DELAY_MS` 才算数（很快抬起的轻点不用等），这是为了双指缩放时先落下的那根手指不被当成点击；鼠标没有这个延迟。
+- 镜头远近只通过 `CameraRig.zoomBy` 改（滚轮和双指都走它）。画面比 `MIN_ASPECT` 窄时镜头按比例拉远，雾也要跟着变远（`WorldScene.setViewScale`），改其中一个时看一下另一个。拉远之后的实际距离有上限（`MAX_VIEW_DISTANCE`），再远画面上下就会超出服务器下发实体的范围。
+- 每个操作都要有屏幕上的按钮，不能只有快捷键或者只有 Shift+点击。
+- 触摸屏上的按钮大小、手机横屏的排布都写在 `style.css` 末尾的媒体查询里（`pointer: coarse`、`orientation: landscape`），不要在脚本里判断是不是手机。
+- 背包或商店开着时 `#hud` 带 `panel-open`，整块拦住点击；没开时只有按钮那一行拦，其余地方点下去仍然是点地面。
 
 ## 线上环境
 
