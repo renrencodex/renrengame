@@ -5,6 +5,7 @@ import grassUrl from './assets/landscape/grass.webp';
 import dirtUrl from './assets/landscape/dirt.webp';
 import stoneUrl from './assets/landscape/stone.webp';
 import woodUrl from './assets/landscape/wood.webp';
+import { createRiver } from './river';
 
 const MATERIALS = {
   grass: { url: grassUrl, base: [119, 137, 83] },
@@ -113,44 +114,6 @@ export function terrainLayers({ size, terrain, seed, landmarks }: GameMap): { la
   return { layers, tint };
 }
 
-/** 连续有水的行合成一片。几何包住岸线，实际水面边缘由同一张遮罩裁切。 */
-function waterStrips({ size, terrain }: GameMap): THREE.BufferGeometry {
-  const vertices: number[] = [];
-  let minX = size;
-  let maxX = 0;
-  let start = 0;
-  for (let z = 0; z <= size; z++) {
-    let left = size;
-    let right = 0;
-    if (z < size) {
-      for (let x = 0; x < size; x++) {
-        if (terrain[z * size + x] === Terrain.Water) {
-          left = Math.min(left, x);
-          right = x + 1;
-        }
-      }
-    }
-    if (left < right) {
-      if (minX === size) start = z;
-      minX = Math.min(minX, left);
-      maxX = Math.max(maxX, right);
-    } else if (minX < maxX) {
-      const x0 = Math.max(0, minX - 0.35);
-      const x1 = Math.min(size, maxX + 0.35);
-      const z0 = Math.max(0, start - 0.35);
-      const z1 = Math.min(size, z + 0.35);
-      vertices.push(x0, 0.008, z0, x0, 0.008, z1, x1, 0.008, z0,
-        x1, 0.008, z0, x0, 0.008, z1, x1, 0.008, z1);
-      minX = size;
-      maxX = 0;
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-  geometry.computeVertexNormals();
-  return geometry;
-}
-
 function controlTexture(data: Uint8Array, size: number): THREE.DataTexture {
   const texture = new THREE.DataTexture(data, size, size);
   texture.magFilter = texture.minFilter = THREE.LinearFilter;
@@ -163,8 +126,6 @@ export function createTerrain(map: GameMap, textures: LandscapeTextures) {
   const { layers, tint } = terrainLayers(map);
   const layerMap = controlTexture(layers, size);
   const tintMap = controlTexture(tint, size);
-  const time = { value: 0 };
-  const detail = { value: 1 };
   const groundMaterial = new THREE.MeshStandardMaterial({ roughness: 0.96 });
   groundMaterial.customProgramCacheKey = () => 'hand-painted-ground';
   groundMaterial.onBeforeCompile = (shader) => {
@@ -201,35 +162,6 @@ export function createTerrain(map: GameMap, textures: LandscapeTextures) {
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
 
-  const riverMaterial = new THREE.MeshStandardMaterial({ roughness: 0.55 });
-  riverMaterial.customProgramCacheKey = () => 'hand-painted-river';
-  riverMaterial.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, { uLayers: { value: layerMap }, uClock: time, uDetail: detail, uTerrainSize: { value: size } });
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vRiver;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRiver = position.xz;');
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec2 vRiver;
-      uniform sampler2D uLayers;
-      uniform float uClock, uDetail, uTerrainSize;`)
-      .replace('#include <map_fragment>', `
-        float shore = texture2D(uLayers, vRiver / uTerrainSize).a - 0.5;
-        float edgeRipple = 0.010 * sin(vRiver.y * 4.5 + vRiver.x * 3.3 - uClock * 1.37);
-        if (shore + edgeRipple < 0.0) discard;
-        float depth = smoothstep(0.0, 0.48, shore);
-        float swell = sin(vRiver.y * 4.1 + sin(vRiver.x * 1.56 + vRiver.y * 0.49) * 1.50 - uClock * 1.48);
-        float curl = sin(vRiver.y * 7.7 - vRiver.x * 5.0 - uClock * 1.85);
-        float ripple = smoothstep(0.62, 1.0, swell * 0.75 + curl * 0.25);
-        float glint = 0.0;
-        if (uDetail > 0.5) {
-          glint = smoothstep(0.82, 1.0, cos(vRiver.x * 7.3 + vRiver.y * 12.1 + swell * 1.6 - uClock * 1.7)) * ripple;
-        }
-        float foam = (1.0 - smoothstep(0.012, 0.080, shore)) * smoothstep(0.06, 0.82, swell + 0.22);
-        vec3 shallows = vec3(0.081, 0.218, 0.194) + swell * vec3(0.009, 0.016, 0.013);
-        vec3 current = vec3(0.021, 0.099, 0.135) + ripple * vec3(0.027, 0.064, 0.059);
-        diffuseColor.rgb *= mix(shallows, current, depth) + foam * vec3(0.18, 0.20, 0.14) + glint * vec3(0.036, 0.076, 0.081);
-      `);
-  };
-  const river = new THREE.Mesh(waterStrips(map), riverMaterial);
-  river.receiveShadow = true;
-  return { ground, river, time, detail };
+  const river = createRiver(map, layerMap);
+  return { ground, river: river.mesh, time: river.clock, detail: river.detail };
 }

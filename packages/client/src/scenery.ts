@@ -1,12 +1,16 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { awningMesh, canopyValance, gableMesh, roofShell } from './architectureMesh';
+import { paintBark, paintFoliage, paintPlaster, paintRoofTiles } from './scenePaint';
+import { barkTrunk, broadleafCrown, pineBough } from './treeMeshes';
 
 const CHUNK_SIZE = 32;
 const CROWN_DETAIL_DISTANCE = 55;
 const LOD_MARGIN = 4;
 
 type Vec3 = [number, number, number];
-type Shape = 'box' | 'wood' | 'stone' | 'roof' | 'trunk' | 'pine' | 'leaves' | 'rock' | 'grass' | 'fern' | 'bloom' | 'contact';
+type Shape = 'box' | 'wood' | 'stone' | 'plaster' | 'gable' | 'roof' | 'awning' | 'valance' | 'glass'
+  | 'trunk' | 'bark' | 'pine' | 'leaves' | 'rock' | 'grass' | 'fern' | 'bloom' | 'contact';
 
 interface Placement {
   yaw?: number;
@@ -43,10 +47,21 @@ export class Scenery {
   build(wood: THREE.Texture, dust: THREE.Texture): void {
     const plain = new THREE.MeshStandardMaterial({ roughness: 0.89 });
     const grain = new THREE.MeshStandardMaterial({ map: wood, roughness: 0.91 });
-    const canopy = new THREE.MeshStandardMaterial({ roughness: 0.91, vertexColors: true, emissive: 0x101a11 });
-    const stone = masonryMaterial(dust);
+    const plaster = paintPlaster();
+    const wall = new THREE.MeshStandardMaterial({ map: plaster, roughness: 0.97 });
+    const fabric = new THREE.MeshStandardMaterial({ map: plaster, roughness: 1, side: THREE.DoubleSide });
+    const leaves = (needles: boolean) => new THREE.MeshStandardMaterial({
+      map: paintFoliage(needles), roughness: 0.93, vertexColors: true, emissive: 0x101b10, side: THREE.DoubleSide,
+    });
     const blades = new THREE.MeshStandardMaterial({ roughness: 1, side: THREE.DoubleSide, vertexColors: true });
-    const shadow = new THREE.MeshBasicMaterial({ map: contactTexture(), transparent: true, depthWrite: false });
+    const materials: Record<Shape, THREE.Material> = {
+      box: plain, rock: plain, wood: grain, trunk: grain, stone: masonryMaterial(dust), plaster: wall, gable: wall,
+      roof: new THREE.MeshStandardMaterial({ map: paintRoofTiles(), roughness: 0.80 }), awning: fabric, valance: fabric,
+      glass: new THREE.MeshStandardMaterial({ roughness: 0.44, emissive: 0x9a581d, emissiveIntensity: 0.42 }),
+      bark: new THREE.MeshStandardMaterial({ map: paintBark(), roughness: 0.95 }), pine: leaves(true), leaves: leaves(false),
+      grass: blades, fern: blades, bloom: blades,
+      contact: new THREE.MeshBasicMaterial({ map: contactTexture(), transparent: true, depthWrite: false }),
+    };
     const geometryCache = new Map<string, THREE.BufferGeometry>();
     const transform = new THREE.Object3D();
     const color = new THREE.Color();
@@ -63,11 +78,10 @@ export class Scenery {
     for (const { shape, detail, entries } of this.parts.values()) {
       const plant = shape === 'grass' || shape === 'fern' || shape === 'bloom';
       const tree = shape === 'pine' || shape === 'leaves';
-      const textured = shape === 'wood' || shape === 'trunk';
-      const material = shape === 'contact' ? shadow : shape === 'stone' ? stone : plant ? blades : tree ? canopy : textured ? grain : plain;
+      const material = materials[shape];
       const mesh: Batch = new THREE.InstancedMesh(geometry(shape), material, entries.length);
-      mesh.castShadow = shape !== 'contact' && !plant && !detail;
-      mesh.receiveShadow = shape !== 'contact';
+      mesh.castShadow = shape !== 'contact' && shape !== 'glass' && shape !== 'gable' && shape !== 'valance' && !plant && !detail;
+      mesh.receiveShadow = shape !== 'contact' && shape !== 'glass';
       entries.forEach(({ position, size, color: tone, yaw = 0, pitch = 0, roll = 0 }, index) => {
         transform.position.set(...position);
         transform.scale.set(...size);
@@ -79,11 +93,13 @@ export class Scenery {
       mesh.computeBoundingSphere();
       this.group.add(mesh);
       if (detail) this.ornaments.push(mesh);
-      if (!detail && (tree || shape === 'stone' || shape === 'grass')) {
+      if (!detail && (tree || shape === 'bark' || shape === 'stone' || shape === 'grass' || shape === 'roof')) {
         const far: Batch = new THREE.InstancedMesh(geometry(shape, true), material, entries.length);
         far.instanceMatrix = mesh.instanceMatrix;
         far.instanceColor = mesh.instanceColor;
-        const bounds = mesh.boundingSphere!;
+        far.computeBoundingSphere();
+        const bounds = mesh.boundingSphere!.clone().union(far.boundingSphere!);
+        mesh.boundingSphere = bounds;
         far.boundingSphere = bounds;
         far.castShadow = mesh.castShadow;
         far.receiveShadow = mesh.receiveShadow;
@@ -113,55 +129,24 @@ export class Scenery {
 function partGeometry(shape: Shape, low: boolean): THREE.BufferGeometry {
   switch (shape) {
     case 'box':
-    case 'wood': return new THREE.BoxGeometry(1, 1, 1);
+    case 'wood':
+    case 'glass':
+    case 'plaster': return new THREE.BoxGeometry(1, 1, 1);
     case 'stone': return low ? new THREE.BoxGeometry(1, 1, 1) : new RoundedBoxGeometry(1, 1, 1, 1, 0.055);
     case 'trunk': return new THREE.CylinderGeometry(0.3, 0.5, 1, 7);
-    case 'pine': return pineGeometry(low);
-    case 'leaves': return foliageGeometry(low);
+    case 'bark': return barkTrunk(low);
+    case 'pine': return pineBough(low);
+    case 'leaves': return broadleafCrown(low);
     case 'rock': return new THREE.DodecahedronGeometry(0.5, 0);
     case 'grass': return bladeGeometry(low ? 4 : 7, 0.075, low);
     case 'fern': return bladeGeometry(7, 0.18, false);
     case 'bloom': return bloomGeometry();
     case 'contact': return new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-    case 'roof': {
-      const profile = new THREE.Shape();
-      profile.moveTo(-0.5, -0.5);
-      profile.lineTo(0.5, -0.5);
-      profile.lineTo(0, 0.5);
-      profile.closePath();
-      return new THREE.ExtrudeGeometry(profile, { depth: 1, bevelEnabled: false }).translate(0, 0, -0.5);
-    }
+    case 'roof': return roofShell(low);
+    case 'gable': return gableMesh();
+    case 'awning': return awningMesh();
+    case 'valance': return canopyValance();
   }
-}
-
-function pineGeometry(low: boolean): THREE.BufferGeometry {
-  const geometry = new THREE.LatheGeometry([
-    new THREE.Vector2(0, -0.48), new THREE.Vector2(0.37, -0.49), new THREE.Vector2(0.49, -0.41),
-    new THREE.Vector2(0.38, -0.22), new THREE.Vector2(0.21, 0.12), new THREE.Vector2(0, 0.5),
-  ], low ? 7 : 12);
-  const positions = geometry.getAttribute('position');
-  for (let i = 0; i < positions.count; i++) {
-    const x = positions.getX(i);
-    const z = positions.getZ(i);
-    const y = positions.getY(i);
-    const angle = Math.atan2(x, z);
-    const edge = 1 + Math.sin(angle * 5 + 0.7) * 0.048;
-    positions.setXYZ(i, x * edge, y + Math.hypot(x, z) * Math.cos(angle * 4) * 0.11, z * edge);
-  }
-  return shadeLeaves(geometry, 0.77);
-}
-
-function foliageGeometry(low: boolean): THREE.BufferGeometry {
-  const geometry = new THREE.IcosahedronGeometry(0.5, low ? 0 : 1);
-  const positions = geometry.getAttribute('position');
-  for (let i = 0; i < positions.count; i++) {
-    const x = positions.getX(i);
-    const y = positions.getY(i);
-    const z = positions.getZ(i);
-    const shape = 1 + Math.sin(x * 15 + y * 7) * Math.cos(z * 12 - y * 5) * 0.11;
-    positions.setXYZ(i, x * shape, y * shape, z * shape);
-  }
-  return shadeLeaves(geometry, 0.72);
 }
 
 function shadeLeaves(geometry: THREE.BufferGeometry, bottom: number): THREE.BufferGeometry {
@@ -238,11 +223,12 @@ function masonryMaterial(dust: THREE.Texture): THREE.MeshStandardMaterial {
       varying float vBlockTop;
       uniform sampler2D uStoneGrain;`)
       .replace('#include <map_fragment>', `
-        vec2 grainUV = mix(vec2(vBlock.x + vBlock.z * 0.79, vBlock.y * 1.12), vBlock.xz, vBlockTop);
-        float grit = texture2D(uStoneGrain, grainUV * 0.56).r;
-        float weather = mix(0.79, 1.19, smoothstep(0.26, 0.45, grit));
-        float moss = smoothstep(0.36, 0.44, grit) * (0.11 + vBlockTop * 0.54);
-        diffuseColor.rgb = mix(diffuseColor.rgb * weather, vec3(0.119, 0.155, 0.071), moss);
+        vec2 grainUV = mix(vec2(vBlock.x + vBlock.z * 0.79, vBlock.y * 1.18), vBlock.xz, vBlockTop);
+        float grit = texture2D(uStoneGrain, grainUV * 0.74).r;
+        float weather = mix(0.72, 1.23, smoothstep(0.25, 0.46, grit));
+        float damp = 1.0 - smoothstep(0.15, 1.36, vBlock.y);
+        float moss = smoothstep(0.36, 0.445, grit) * (0.10 + vBlockTop * 0.63 + damp * 0.19);
+        diffuseColor.rgb = mix(diffuseColor.rgb * weather, vec3(0.131, 0.174, 0.079), moss);
       `);
   };
   return material;

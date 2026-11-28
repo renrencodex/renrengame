@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { mulberry32, Terrain } from '@mmo/shared';
 import type { Bridge, GameMap, Obstacle, Point } from '@mmo/shared';
+import { addCottage } from './cottages';
 import { Scenery } from './scenery';
 import { createTerrain } from './terrain';
 import type { LandscapeTextures } from './terrain';
@@ -30,12 +31,13 @@ export function createLandscape(map: GameMap, textures: LandscapeTextures) {
       case 'tree': addTree(scenery, obstacle, random); break;
       case 'rock': addRock(scenery, obstacle, random); break;
       case 'wall': addWall(scenery, obstacle, random); break;
-      case 'house': addHouse(scenery, obstacle, random); break;
+      case 'house': addCottage(scenery, obstacle, random); break;
       case 'fence': addFence(scenery, obstacle); break;
       case 'stall': addStall(scenery, obstacle, random); break;
     }
   }
   for (const bridge of map.bridges) addBridge(scenery, map, bridge, random);
+  addShoreDetails(scenery, map, mulberry32(map.seed ^ 0x45fcd711));
   addPlants(scenery, map, mulberry32(map.seed ^ 0x78a27b51));
   const village = map.landmarks.find((site) => site.kind === 'village');
   if (village) addPlazaRim(scenery, village, random);
@@ -60,34 +62,46 @@ function addTree(scenery: Scenery, obstacle: Obstacle, random: () => number): vo
   const z = obstacle.z + 0.5;
   const height = obstacle.h;
   const yaw = random() * FULL_TURN;
-  const pine = random() < 0.72;
+  const spruce = random();
+  const pine = spruce < 0.72;
+  const bark = pine ? 0x947c61 : 0xb29d7d;
   scenery.add('contact', [x, 0.012, z], [1.75, 1, 1.46], 0xffffff);
-  scenery.add('trunk', [x, height * 0.30, z], [0.53, height * 0.6, 0.48], DARK_OAK, { yaw });
-  for (let i = 0; i < 3; i++) {
-    const angle = yaw + i * 2.1;
-    scenery.add('trunk', [x + Math.cos(angle) * 0.19, 0.12, z + Math.sin(angle) * 0.19],
-      [0.22, 0.56, 0.24], OAK, { yaw: -angle, roll: 1.29, detail: true });
+  scenery.add('bark', [x, height * 0.42, z], [0.58, height * 0.84, 0.53], bark, { yaw });
+  for (let i = 0; i < 4; i++) {
+    const angle = yaw + i * 1.61;
+    scenery.add('bark', [x + Math.cos(angle) * 0.19, 0.112, z + Math.sin(angle) * 0.19],
+      [0.24, 0.51, 0.25], bark, { yaw: -angle, roll: -1.21, detail: true });
   }
   if (pine) {
-    const palette = random() < 0.55 ? [0x385a42, 0x426b4c, 0x567d54, 0x71935d] : [0x4e6640, 0x5b7948, 0x698851, 0x87a166];
-    const layers = height > 5.2 ? 4 : 3;
+    const palette = spruce < 0.48
+      ? [0x406b4d, 0x4e7c56, 0x5f8a60, 0x739967, 0x8aa875]
+      : [0x597046, 0x667f4f, 0x75945c, 0x829c62, 0x98ac71];
+    const layers = height > 5.15 ? 5 : 4;
+    const base = spruce < 0.48 ? 0.39 : 0.49;
     for (let layer = 0; layer < layers; layer++) {
       const upper = layer / (layers - 1);
-      const width = height * (0.59 - 0.35 * upper) * (0.89 + random() * 0.19);
-      const drift = Math.sin(yaw + layer) * 0.17;
-      scenery.add('pine', [x + drift, height * (0.43 + upper * 0.37), z - drift * 0.5],
-        [width, height * (0.38 - upper * 0.04), width * 0.96], palette[layer], { yaw: yaw + layer * 0.63 });
+      const width = height * ((spruce < 0.48 ? 0.52 : 0.61) - 0.39 * upper) * (0.93 + random() * 0.17);
+      const drift = (0.055 + upper * 0.13) * Math.sin(yaw + layer * 0.7);
+      scenery.add('pine', [x + drift, height * (base + upper * (0.884 - base)), z - drift * 0.46],
+        [width, height * (0.30 - upper * 0.055), width * 0.95], palette[layer], { yaw: yaw + layer * 0.76 });
     }
   } else {
-    const palette = random() < 0.73 ? [0x597545, 0x75954e, 0x9cae65] : [0x7a7546, 0xa69353, 0xc5aa64];
-    for (let branch = 0; branch < 4; branch++) {
+    const palette = random() < 0.76 ? [0x66824b, 0x7e9b58, 0xa1ac61] : [0x8d7749, 0xb39959, 0xcdb56a];
+    for (let branch = 0; branch < 5; branch++) {
       const angle = yaw + branch * 2.39996;
-      const dx = 0.55 * Math.cos(angle);
-      const dz = 0.55 * Math.sin(angle);
-      scenery.add('leaves', [x + dx, height * (0.62 + 0.055 * branch), z + dz],
-        [height * (0.52 - 0.036 * branch), height * 0.46, height * 0.49], palette[branch % palette.length], { yaw: angle });
+      const r = height * (0.116 + random() * 0.055);
+      const dx = r * Math.cos(angle);
+      const dz = r * Math.sin(angle);
+      const crownY = height * (0.65 + (branch % 3) * 0.067);
+      const spread = height * (0.32 + random() * 0.092);
+      scenery.add('leaves', [x + dx, crownY, z + dz],
+        [spread, height * (0.28 + random() * 0.09), spread * 0.99], palette[branch % palette.length], { yaw: angle });
+      const from = height * (0.37 + (branch % 3) * 0.039);
+      const rise = crownY - from;
+      scenery.add('bark', [x + dx * 0.47, from + rise / 2, z + dz * 0.47],
+        [0.22, Math.hypot(r, rise), 0.19], bark, { yaw: -angle, roll: -Math.atan2(r, rise), detail: true });
     }
-    scenery.add('leaves', [x - 0.21, height * 0.92, z + 0.12], [height * 0.36, height * 0.33, height * 0.38], palette[2], { yaw });
+    scenery.add('leaves', [x - 0.20, height * 0.88, z + 0.14], [height * 0.41, height * 0.34, height * 0.37], palette[2], { yaw });
   }
 }
 
@@ -119,15 +133,18 @@ function addWall(scenery: Scenery, { x, z, w, d, h }: Obstacle, random: () => nu
   scenery.add('stone', [x + w / 2, 0.14, z + d / 2], [w - 0.06, 0.28, d - 0.06], 0x747e69);
   for (let row = 0; row < rows; row++) {
     const offset = row % 2 ? -brick * 0.43 : 0;
+    const joints = Array.from({ length: columns + 2 }, (_, col) =>
+      col * brick + offset + (col === 0 || col >= columns ? 0 : (random() - 0.5) * brick * 0.27));
     for (let col = 0; col <= columns; col++) {
-      const start = Math.max(0, col * brick + offset);
-      const end = Math.min(length, (col + 1) * brick + offset);
+      const start = Math.max(0, joints[col]);
+      const end = Math.min(length, joints[col + 1]);
       if (end - start < 0.12 || (row === rows - 1 && columns >= 3 && random() < 0.22)) continue;
       const u = (start + end) / 2;
       const worn = (random() - 0.5) * 0.12;
-      const shade = pick([0x7c8277, 0x95948a, 0x798075, 0xa2a091, 0x8c927f], random);
+      const shade = pick([0x798477, 0xa09a89, 0x858b87, 0xaea28e, 0x8d957d], random);
       scenery.add('stone', at(u, (row + 0.5) * rise + worn * 0.45),
-        [end - start - 0.032, rise - 0.03 + worn, width + worn], shade, { yaw, roll: worn * 0.29 });
+        [end - start - 0.032, rise - 0.03 + worn, width + worn], shade,
+        { yaw: yaw + (row === rows - 1 ? worn * 0.38 : 0), roll: worn * 0.41 });
     }
   }
   for (let i = 0; i < columns + 2; i++) {
@@ -135,80 +152,6 @@ function addWall(scenery: Scenery, { x, z, w, d, h }: Obstacle, random: () => nu
     const grain = 0.13 + random() * 0.22;
     scenery.add('rock', at(random() * length, grain * 0.25, edge), [grain * 1.3, grain * 0.54, grain],
       pick([0xa09e8a, 0x849080, 0x858674], random), { yaw: random() * FULL_TURN, detail: true });
-  }
-}
-
-function addHouse(scenery: Scenery, { x, z, w, d, h }: Obstacle, random: () => number): void {
-  const cx = x + w / 2;
-  const cz = z + d / 2;
-  const front = z + d - 0.1;
-  const right = x + w - 0.1;
-  const tiles = random() < 0.68 ? [0x97574d, 0xad6453, 0xb4795f, 0x9c6558] : [0x5f7771, 0x718982, 0x667a72, 0x7e8b81];
-  scenery.add('contact', [cx, 0.012, cz], [w + 1.65, 1, d + 1.5], 0xffffff);
-  scenery.add('stone', [cx, 0.21, cz], [w - 0.08, 0.42, d - 0.08], 0x8c897d);
-  scenery.add('box', [cx, h / 2, cz], [w - 0.24, h - 0.10, d - 0.24], 0xd6b78c);
-  scenery.add('roof', [cx, h + 0.66, cz], [w + 0.38, 1.72, d + 0.39], tiles[0]);
-  scenery.add('wood', [cx, h + 1.54, cz], [0.18, 0.16, d + 0.54], DARK_OAK);
-  for (const side of [-1, 1]) {
-    const halfSpan = (w + 0.38) / 2;
-    const pitch = Math.atan2(1.72, halfSpan);
-    const rowLength = Math.hypot(halfSpan, 1.72) / 5;
-    const count = Math.ceil((d + 0.36) / 0.52);
-    const spacing = (d + 0.36) / count;
-    scenery.add('wood', [cx + side * halfSpan, h - 0.17, cz], [0.17, 0.20, d + 0.45], DARK_OAK);
-    for (let row = 0; row < 5; row++) {
-      const progress = (row + 0.49) / 5;
-      const px = cx + side * halfSpan * progress;
-      const py = h + 1.55 - 1.72 * progress;
-      const stagger = row % 2 ? -spacing * 0.46 : 0;
-      for (let col = 0; col <= count; col++) {
-        const a = Math.max(0, spacing * col + stagger);
-        const b = Math.min(d + 0.36, spacing * (col + 1) + stagger);
-        if (b - a < 0.1) continue;
-        scenery.add('box', [px, py + (random() - 0.5) * 0.027, z - 0.18 + (a + b) / 2],
-          [rowLength * 1.03, 0.079, b - a - 0.022], pick(tiles, random), { roll: -side * pitch, detail: true });
-      }
-    }
-  }
-  const chimneyX = x + w * 0.74;
-  const chimneyZ = z + d * 0.27;
-  scenery.add('stone', [chimneyX, h + 1.14, chimneyZ], [0.57, 1.48, 0.60], 0x888677);
-  scenery.add('stone', [chimneyX, h + 1.9, chimneyZ], [0.73, 0.19, 0.73], 0x676b62);
-  for (const y of [h + 1.17, h + 1.50, h + 1.8]) {
-    scenery.add('box', [chimneyX, y, chimneyZ], [0.59, 0.023, 0.62], 0x78766a, FINE);
-  }
-
-  for (const upright of [x + 0.17, cx - w * 0.22, cx + w * 0.22, x + w - 0.17]) {
-    scenery.add('wood', [upright, h / 2, front], [0.18, h, 0.20], DARK_OAK);
-  }
-  for (const y of [0.46, h * 0.73, h - 0.20]) {
-    scenery.add('wood', [cx, y, front], [w - 0.15, 0.14, 0.18], DARK_OAK);
-  }
-  const doorZ = front + 0.09;
-  scenery.add('wood', [cx, 0.95, doorZ], [1.13, 1.90, 0.16], DARK_OAK);
-  for (let plank = -1; plank <= 1; plank++) {
-    scenery.add('wood', [cx + 0.31 * plank, 0.94, doorZ + 0.08], [0.296, 1.74, 0.06], OAK, FINE);
-  }
-  for (const y of [0.38, 1.47]) scenery.add('box', [cx, y, doorZ + 0.12], [0.87, 0.073, 0.055], 0x544f46, FINE);
-  scenery.add('box', [cx + 0.37, 0.9, doorZ + 0.14], [0.08, 0.13, 0.07], 0xc9a666, FINE);
-  for (const windowX of [cx - w * 0.35, cx + w * 0.35]) addWindow(scenery, windowX, h * 0.56, front + 0.08, 0);
-  addWindow(scenery, right + 0.08, h * 0.56, cz, Math.PI / 2);
-  for (const y of [0.46, h * 0.73, h - 0.20]) scenery.add('wood', [right, y, cz], [0.17, 0.14, d - 0.12], DARK_OAK);
-  for (const at of [z + 0.17, cz + 0.7, z + d - 0.17]) {
-    scenery.add('wood', [right, h / 2, at], [0.19, h, 0.18], DARK_OAK);
-  }
-}
-
-function addWindow(scenery: Scenery, x: number, y: number, z: number, yaw: number): void {
-  const at = (side: number, up: number, out: number): [number, number, number] =>
-    [x + side * Math.cos(yaw) + out * Math.sin(yaw), y + up, z - side * Math.sin(yaw) + out * Math.cos(yaw)];
-  scenery.add('wood', at(0, 0, 0), [0.95, 0.79, 0.17], DARK_OAK, { yaw });
-  scenery.add('box', at(0, 0, 0.10), [0.70, 0.53, 0.052], 0xe6b878, { yaw });
-  scenery.add('stone', at(0, -0.36, 0.10), [1.1, 0.13, 0.31], 0x9c9281, { yaw });
-  scenery.add('wood', at(0, 0, 0.14), [0.082, 0.56, 0.056], DARK_OAK, { yaw, detail: true });
-  scenery.add('wood', at(0, 0, 0.14), [0.73, 0.07, 0.056], DARK_OAK, { yaw, detail: true });
-  for (const side of [-0.63, 0.63]) {
-    scenery.add('wood', at(side, 0.01, 0.04), [0.29, 0.68, 0.10], 0xd5d3b4, { yaw, detail: true });
   }
 }
 
@@ -242,10 +185,10 @@ function addStall(scenery: Scenery, { x, z, w, d, h }: Obstacle, random: () => n
   const stripe = w / 7;
   for (let i = 0; i < 7; i++) {
     const px = x + stripe * (i + 0.5);
-    const shade = i % 2 ? 0xd5c0a0 : cloth;
-    scenery.add('box', [px, h, cz], [stripe + 0.003, 0.095, d], shade, { pitch: 0.088 });
-    scenery.add('box', [px, h - d * 0.045 - 0.15, z + d - 0.06], [stripe - 0.024, 0.23, 0.11], shade);
-    scenery.add('box', [px, h - d * 0.045 - 0.24, z + d - 0.008], [stripe - 0.08, 0.052, 0.022], 0xd0ab71, FINE);
+    const shade = i % 2 ? 0xe6d0a8 : cloth;
+    scenery.add('awning', [px, h + 0.12, cz], [stripe + 0.002, 0.60, d + 0.16], shade);
+    scenery.add('valance', [px, h - 0.185, z + d + 0.078], [stripe - 0.012, 0.31, 0.18], shade);
+    scenery.add('wood', [px, h - 0.04, z + d + 0.079], [stripe + 0.003, 0.046, 0.052], 0xdac193, FINE);
   }
   for (const side of [-1, 1]) {
     const px = cx + side * w * 0.23;
@@ -290,6 +233,29 @@ function addBridge(scenery: Scenery, map: GameMap, { x, z, w, d }: Bridge, rando
       scenery.add('box', [px, 0.15, edge], [0.29, 0.07, 0.24], 0x605e50, FINE);
     }
     for (const y of [0.38, 0.78]) scenery.add('wood', [(left + right) / 2, y, edge], [length, 0.105, 0.19], OAK);
+  }
+}
+
+function addShoreDetails(scenery: Scenery, { size, terrain, blocked }: GameMap, random: () => number): void {
+  for (let row = 2; row < size - 2; row += 3) {
+    for (let col = 1; col < size - 1; col++) {
+      const cell = row * size + col;
+      if (terrain[cell] !== Terrain.Bank || blocked[cell]) continue;
+      const towardWater = terrain[cell + 1] === Terrain.Water ? 1 : terrain[cell - 1] === Terrain.Water ? -1 : 0;
+      if (!towardWater || random() > 0.73) continue;
+      const edge = col + (towardWater > 0 ? 0.87 : 0.13);
+      const z = row + 0.2 + random() * 0.6;
+      for (let i = 0; i < 3; i++) {
+        const stone = 0.12 + random() * 0.22;
+        scenery.add('rock', [edge - towardWater * random() * 0.26, stone * 0.18, z + (i - 1) * 0.21],
+          [stone * 1.06, stone * 0.46, stone], pick([0x9a9c88, 0x788f84, 0xaba48b, 0x868c78], random),
+          { yaw: random() * FULL_TURN, detail: i > 0 });
+      }
+      if (random() < 0.57) {
+        scenery.add('grass', [edge - towardWater * 0.43, 0, z - 0.18], [0.69, 0.50, 0.80], pick(REEDS, random),
+          { yaw: random() * FULL_TURN });
+      }
+    }
   }
 }
 
