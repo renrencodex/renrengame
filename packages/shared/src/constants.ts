@@ -79,6 +79,13 @@ export const MONSTER_RESPAWN_MS = 20000;
 export const MONSTER_THINK_MS = 200;
 /** 每个 tick 所有怪物加起来最多寻路几次，和玩家的寻路上限分开算。 */
 export const MAX_MONSTER_PATHFINDS_PER_TICK = 8;
+/**
+ * 两只怪物离得比这个距离近时，会被慢慢推开，免得叠在一起看不清。
+ * 只是“软”分离：不挡路，地方不够时仍然会重叠。玩家不推怪物，也不会被推。
+ */
+export const MONSTER_SEPARATION_DISTANCE = 0.9;
+/** 怪物被推开的最快速度（单位/秒）。必须比 MONSTER_SPEED 小，这样被挤着的怪物仍然能往前走。 */
+export const MONSTER_SEPARATION_SPEED = 1.5;
 
 // ---- 掉落和物品 ----
 

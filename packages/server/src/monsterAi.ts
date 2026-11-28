@@ -18,6 +18,7 @@ import {
 } from '@mmo/shared';
 import type { Pathfinder } from '@mmo/shared';
 import type { Character, Monster, Player } from './entity';
+import { MonsterSeparation } from './separation';
 
 /** 同一只怪物两次追击寻路的最小间隔。 */
 const REPATH_MS = 300;
@@ -54,6 +55,7 @@ export class MonsterAi {
   /** 累计的怪物寻路次数。 */
   pathfinds = 0;
   private pathBudget = 0;
+  private readonly separation = new MonsterSeparation();
 
   constructor(private readonly host: AiHost) {}
 
@@ -80,6 +82,8 @@ export class MonsterAi {
       }
       if (m.ai === 'return' && !m.path && distance(m.x, m.z, m.homeX, m.homeZ) < HOME_DISTANCE) this.arriveHome(m);
     }
+    // 所有怪物都走完这一步之后，再把挤在一起的推开。
+    this.separation.update(monsters, this.host);
   }
 
   /** 怪物被玩家打了：闲着的话就去追打它的人。 */

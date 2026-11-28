@@ -41,6 +41,9 @@ import type { Net } from './net';
 import { pickEntity } from './picking';
 import type { PickCandidate } from './picking';
 import { WorldScene } from './scene';
+import { distanceVolume, inventorySound } from './sound';
+import type { SoundPlayer } from './sound';
+import type { SoundId } from './synth';
 import { Targeting } from './targeting';
 
 /** 视野里除自己以外的一个实体（其他玩家或怪物）。 */
@@ -68,6 +71,14 @@ const MERCHANT_STAND_DISTANCE = 1.6;
 const SHOP_CLOSE_MARGIN = 0.6;
 /** 离商人超过这么远就不画他了。和服务器的视野差不多大，画面里本来也看不到那么远。 */
 const MERCHANT_VISIBLE_DISTANCE = AOI_CELL_SIZE * 1.5;
+/** 自己跑步时两次脚步声的间隔：跑步动作一个来回（0.933 秒，播放速度 1.2）迈两步。 */
+const STEP_SECONDS = 0.39;
+/** 起步之后过这么久响第一声。 */
+const FIRST_STEP_SECONDS = 0.12;
+/** 和自己无关的声音（别人打怪、别的怪物倒下）除了按距离变小，再打这个折扣，不盖过自己的。 */
+const OTHERS_VOLUME = 0.6;
+/** 声音在画面最左、最右时偏向那一侧的程度。不偏到底，戴耳机时不会只有一边响。 */
+const PAN_WIDTH = 0.7;
 
 /** 客户端主体：把网络消息变成场景里的角色，并驱动每一帧的更新和渲染。 */
 export class Game {
@@ -102,12 +113,15 @@ export class Game {
   private weapon: ItemId | null = null;
   /** 这个时间之前不发喝药水的请求。服务器有自己的冷却判定，这里只是不发注定失败的请求。 */
   private potionReadyAt: number;
+  /** 再过多久响下一声脚步。 */
+  private stepIn = FIRST_STEP_SECONDS;
   private lastFrameAt = performance.now();
 
   constructor(
     private readonly container: HTMLElement,
     private readonly net: Net,
     private readonly hud: Hud,
+    private readonly sound: SoundPlayer,
     private readonly assets: CharacterAssets | null,
     private readonly itemAssets: ItemAssets,
     private readonly selfId: number,
@@ -215,7 +229,11 @@ export class Game {
           remote.z = z;
           // 血量和死亡不做插值，收到就生效。
           remote.view.setHp(hp);
-          this.setRemoteDead(remote, state === STATE_DEAD);
+          if (this.setRemoteDead(remote, state === STATE_DEAD) && remote.dead) {
+            const cue = remote.kind === 'monster' ? 'monsterDeath' : 'playerDeath';
+            // 自己正在打的那只倒下时，声音不按距离减小。
+            this.playAt(cue, x, z, id === this.targeting.targetId);
+          }
         }
         break;
       case 'hit':
@@ -227,9 +245,14 @@ export class Game {
       case 'inv':
         this.onInventory(msg.items, msg.weapon);
         break;
-      case 'weapon':
-        this.viewOf(msg.id)?.setWeapon(msg.item);
+      case 'weapon': {
+        const view = this.viewOf(msg.id);
+        if (!view) break;
+        view.setWeapon(msg.item);
+        const { x, z } = view.root.position;
+        this.playAt(msg.item ? 'equip' : 'unequip', x, z, msg.id === this.selfId);
         break;
+      }
       case 'welcome':
       case 'pong':
         break;
@@ -319,17 +342,21 @@ export class Game {
         this.headingToShop = false;
         this.hud.closeShop();
         this.respawnAt = performance.now() + PLAYER_RESPAWN_MS;
+        this.sound.play('playerDeath');
       } else {
         this.hud.setBanner(null);
+        this.sound.play('respawn');
       }
     }
     if (!dead) this.local.onServerState(x, z, state === STATE_MOVING);
   }
 
-  private setRemoteDead(remote: Remote, dead: boolean, instant = false): void {
-    if (remote.dead === dead) return;
+  /** 返回死活有没有变。 */
+  private setRemoteDead(remote: Remote, dead: boolean, instant = false): boolean {
+    if (remote.dead === dead) return false;
     remote.dead = dead;
     remote.view.setDead(dead, instant);
+    return true;
   }
 
   private onHit(from: number, to: number, damage: number): void {
@@ -341,6 +368,25 @@ export class Game {
     target.flash();
     const className = to === this.selfId ? 'damage-text taken' : 'damage-text';
     this.floating.spawn(x, target.height + 0.3, z, `-${damage}`, className);
+
+    // 怪物只打玩家、玩家只打怪物，所以看挨打的是谁就知道是哪一种攻击；打人的不在视野里也没关系。
+    let cue: SoundId;
+    if (to === this.selfId) cue = 'hurt';
+    else if (this.remotes.get(to)?.kind !== 'monster') cue = 'claw';
+    else cue = attacker?.armed ? 'slash' : 'punch';
+    this.playAt(cue, x, z, from === this.selfId || to === this.selfId);
+  }
+
+  /**
+   * 在 (x, z) 响一个声音。own 是和自己直接有关的（自己打的、自己挨的），用原本的音量；
+   * 别的按离自己多远变小，太远就不响。左右的位置跟着它在画面上的位置走。
+   * 声音都是从已有的消息和状态里推出来的，不为它加消息；hit 和 heal 积压时会被丢掉，那一下就没有声音。
+   */
+  private playAt(id: SoundId, x: number, z: number, own: boolean): void {
+    const volume = own ? 1 : OTHERS_VOLUME * distanceVolume(Math.hypot(x - this.local.x, z - this.local.z));
+    if (volume <= 0) return;
+    const onScreen = this.projected.set(x, 0, z).project(this.rig.camera);
+    this.sound.play(id, volume, THREE.MathUtils.clamp(onScreen.x, -1, 1) * PAN_WIDTH);
   }
 
   private onHeal(id: number, amount: number): void {
@@ -348,6 +394,8 @@ export class Game {
     if (!view) return;
     const { x, z } = view.root.position;
     this.floating.spawn(x, view.height + 0.3, z, `+${amount}`, 'heal-text');
+    // 自己喝药水的声音跟着背包的变化走（见 onInventory），那个不会丢。
+    if (id !== this.selfId) this.playAt('drink', x, z, false);
   }
 
   /**
@@ -363,6 +411,8 @@ export class Game {
     // 第一次是进入世界时的背包，不算捡到。
     if (!before) return;
 
+    const cue = inventorySound(before, weaponBefore, items, weapon);
+    if (cue) this.sound.play(cue);
     if ((items.potion ?? 0) < (before.potion ?? 0)) {
       this.potionReadyAt = performance.now() + POTION_COOLDOWN_MS;
       this.hud.setPotionCooldown(this.potionReadyAt);
@@ -397,6 +447,7 @@ export class Game {
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
     if (ev.key === '1') this.usePotion();
     else if (ev.key === 'b' || ev.key === 'B') this.hud.toggleBag();
+    else if (ev.key === 'm' || ev.key === 'M') this.hud.toggleSound();
     else if (ev.key === 'Escape') {
       this.headingToShop = false;
       this.hud.closeShop();
@@ -542,6 +593,19 @@ export class Game {
     this.ring.show(pos.x, pos.z);
   }
 
+  /** 自己跑动时按固定的间隔响脚步声。别人和怪物的脚步不响，人一多就成了一片噪声。 */
+  private updateSteps(dt: number): void {
+    if (!this.local.moving) {
+      this.stepIn = FIRST_STEP_SECONDS;
+      return;
+    }
+    this.stepIn -= dt;
+    if (this.stepIn > 0) return;
+    // 多走过的那一点时间算进下一步里，帧率低的时候脚步也不会越来越慢、和跑步的动作错开。
+    this.stepIn += STEP_SECONDS;
+    this.sound.play('step');
+  }
+
   private readonly resize = (): void => {
     const width = this.container.clientWidth || window.innerWidth;
     const height = this.container.clientHeight || window.innerHeight;
@@ -565,6 +629,7 @@ export class Game {
     } else {
       this.chaseTarget(now);
       this.local.update(dt, now);
+      this.updateSteps(dt);
     }
     if (this.selfView) {
       this.selfView.setPose(this.local.x, this.local.z, this.local.moving);

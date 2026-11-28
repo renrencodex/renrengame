@@ -18,7 +18,7 @@ const UPDATE_MS = 500;
 
 /**
  * 左上角的状态栏：自己的血条、金币、药水、背包，以及延迟、视野内数量、坐标、帧率；还有屏幕中间的提示。
- * 药水是一个按钮，点它和按数字键 1 一样；背包按钮（或者 B 键）打开下面的背包面板。
+ * 药水是一个按钮，点它和按数字键 1 一样；背包按钮（或者 B 键）打开下面的背包面板；音效按钮（或者 M 键）开关声音。
  * 所有操作都有按钮，没有键盘的手机也能用；按钮在触摸屏上的大小由 style.css 里的 (pointer: coarse) 决定。
  * 商店面板也在这里，什么时候打开、关上由 Game 决定（走到商人跟前、走远了）。
  */
@@ -32,6 +32,10 @@ export class Hud {
   /** 玩家在商店里点了买、卖。 */
   onBuy: ((item: ItemId, count: number) => void) | null = null;
   onSell: ((item: ItemId, count: number) => void) | null = null;
+  /** 玩家想开关声音（点了音效按钮，或者按了 M）。开关之后由外面调用 setSoundOn 更新按钮。 */
+  onToggleSound: (() => void) | null = null;
+  /** 面板打开或者关上了，可以响一下。 */
+  onPanelSound: (() => void) | null = null;
   private readonly shop = new ShopPanel();
   private readonly status = document.createElement('div');
   private readonly hpFill = document.createElement('div');
@@ -41,6 +45,8 @@ export class Hud {
   private readonly potionCount = document.createElement('span');
   private readonly potionCooldown = document.createElement('div');
   private readonly bagButton = document.createElement('button');
+  private readonly soundButton = document.createElement('button');
+  private readonly soundLabel = document.createElement('span');
   private readonly bag = new BagPanel();
   private frames = 0;
   private lastUpdate = 0;
@@ -91,7 +97,16 @@ export class Hud {
       this.bagButton.blur();
       this.toggleBag();
     });
-    items.append(goldBox, this.potionButton, this.bagButton);
+
+    this.soundButton.type = 'button';
+    this.soundButton.className = 'hud-button hud-sound';
+    this.soundButton.append(this.soundLabel, keyHint('M'));
+    this.soundButton.addEventListener('click', () => {
+      this.soundButton.blur();
+      this.toggleSound();
+    });
+    this.setSoundOn(true);
+    items.append(goldBox, this.potionButton, this.bagButton, this.soundButton);
 
     this.bag.onUse = (item) => {
       if (item === 'potion') this.onUsePotion?.();
@@ -147,6 +162,7 @@ export class Hud {
     this.bagButton.classList.toggle('open', this.bag.open);
     if (this.bag.open) this.bagButton.classList.remove('notice');
     this.syncPanels();
+    this.onPanelSound?.();
   }
 
   get shopOpen(): boolean {
@@ -154,13 +170,28 @@ export class Hud {
   }
 
   openShop(): void {
+    if (this.shop.open) return;
     this.shop.show();
     this.syncPanels();
+    this.onPanelSound?.();
   }
 
   closeShop(): void {
+    if (!this.shop.open) return;
     this.shop.hide();
     this.syncPanels();
+    this.onPanelSound?.();
+  }
+
+  toggleSound(): void {
+    this.onToggleSound?.();
+  }
+
+  /** 音效按钮显示成开着还是关着。 */
+  setSoundOn(on: boolean): void {
+    this.soundLabel.textContent = on ? '音效' : '静音';
+    this.soundButton.classList.toggle('off', !on);
+    this.soundButton.title = on ? '关掉声音（M 键）' : '打开声音（M 键）';
   }
 
   /** 药水进入冷却，到 readyAt（本地时间）结束。 */

@@ -301,6 +301,11 @@ export class EntityView {
     this.refreshAction();
   }
 
+  /** 手里有没有拿着武器。 */
+  get armed(): boolean {
+    return this.weapon !== null;
+  }
+
   /** 直接放到某个位置，不改变朝向。 */
   place(x: number, z: number): void {
     this.root.position.set(x, 0, z);

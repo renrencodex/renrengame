@@ -30,7 +30,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 
 1. 每次都跑 `pnpm typecheck` 和 `pnpm test`。
 2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。机器人会打怪、捡东西、捡到武器就装备、攒够金币去找商人，“命中”和“拾取”应该大于 0（剑掉得少，“装备武器”可能是 0）；机器人很多时它们几乎不会死，也不喝药水，分到的金币也不够买东西，这些要用很少的机器人（`--count 30 --duration 60`）、单测或者自己进游戏验证。
-3. 改了客户端的画面或交互，单测覆盖不到。可以用无头 Chromium 打开页面检查，启动参数加 `--use-angle=swiftshader --enable-unsafe-swiftshader` 才有 WebGL。做不了就在回复里明确说画面没有验证过。改了状态栏、面板或输入，还要用手机的尺寸再看一遍（Playwright 的 `isMobile: true, hasTouch: true`，竖屏 390×844 和横屏 844×390）；双指要用 CDP 的 `Input.dispatchTouchEvent` 发两个触点。
+3. 改了客户端的画面或交互，单测覆盖不到。可以用无头 Chromium 打开页面检查，启动参数加 `--use-angle=swiftshader --enable-unsafe-swiftshader` 才有 WebGL。做不了就在回复里明确说画面没有验证过。改了状态栏、面板或输入，还要用手机的尺寸再看一遍（Playwright 的 `isMobile: true, hasTouch: true`，竖屏 390×844 和横屏 844×390）；双指要用 CDP 的 `Input.dispatchTouchEvent` 发两个触点。声音听不了，但可以检查“该响的时候响了哪个、多大音量”：页面加载前用 `addInitScript` 包一层 `AudioBufferSourceNode.prototype.start` 把每次播放记下来，按缓冲区的长度认出是哪个声音（各个声效的长度都不一样）。这台机器上的无头 Chromium 同一个进程同时只有一个页面能打开音频设备，要两个页面同时有声音就各开一个浏览器。声效好不好听只能靠人听，改了 `synth.ts` 的参数要在回复里说明没有听过。
 
 新增逻辑时把测试放在对应包的 `test/` 目录，文件名以 `.test.ts` 结尾。
 
@@ -52,6 +52,14 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 怪物和玩家共用 id 空间、AOI、`enter`、`leave` 和快照。实体进出视野统一走 `World` 的 `addToView`、`removeFromView`，玩家复活、怪物尸体消失和重生都是用它们实现的“离开再进入”，没有专门的消息。
 - 怪物 AI（`server/src/monsterAi.ts`）是同步的状态机，通过 `AiHost` 接口访问世界。怪物寻路有单独的每 tick 上限（`MAX_MONSTER_PATHFINDS_PER_TICK`），不占玩家的额度。
 - 怪物用的是另一个寻路器，安全区里的格子在它眼里是障碍，所以怪物的任何路线都不会穿过安全区。安全区按格子判定（`World.inSafeZone`），判定玩家是否安全和怪物能不能走进去必须用同一个边界。
+
+**角色之间没有碰撞，怪物之间只有软分离**
+
+- 没有物理引擎。墙靠寻路绕开，角色互相可以穿过去。不要加“角色挡住角色”的硬碰撞：窄路口会被堵死，算好的路线会因为别人走动而失效。
+- 怪物离得比 `MONSTER_SEPARATION_DISTANCE` 近时，由 `server/src/separation.ts` 在每个 tick 的怪物 AI 之后慢慢推开。它只挪位置，不改路径和 AI 状态，每次挪动都用怪物的寻路器检查视线，所以不会把怪物推进墙里或安全区里。
+- 只有两种怪物会被推：正在走路的（不往前推，所以不会超过 `MONSTER_SPEED`；`MONSTER_SEPARATION_SPEED` 必须比 `MONSTER_SPEED` 小，被挤着的怪物才能走到目标跟前），和站在目标旁边打的（只绕着目标转，离目标的距离不变，否则它会被推出 `MONSTER_STOP_DISTANCE` 又走回来，来回抖）。闲着的怪物不推，因为它不会自己走回出生位置。
+- 玩家不推怪物，也不会被推。玩家的位置客户端要预测，服务器在路径之外再挪它，客户端就会不断被纠正。
+- 被推的怪物在快照里还是“站立”状态，客户端看到位置变了会自己播放跑步动作（`SnapshotBuffer.sample`）。所以分离必须能停下来：`separation.ts` 里该推的距离小于 `MIN_STEP` 就不推，改推力的算法时要保留“挤了很多只时最后都站住”这个单测。
 
 **地上的物品和背包**
 
@@ -115,6 +123,14 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 触摸屏上的按钮大小、手机横屏的排布都写在 `style.css` 末尾的媒体查询里（`pointer: coarse`、`orientation: landscape`），不要在脚本里判断是不是手机。
 - 背包或商店开着时 `#hud` 带 `panel-open`，整块拦住点击；没开时只有按钮那一行拦，其余地方点下去仍然是点地面。
 
+**声效**
+
+- 声效是合成的，没有音频文件。`client/src/synth.ts` 只做计算（每个声音是几层波形和噪声，参数在 `RECIPES`），不碰浏览器的接口，有单测；`client/src/sound.ts` 的 `SoundPlayer` 负责播放。加一种声音要改三处：`synth.ts` 的 `SOUND_IDS` 和 `RECIPES`、`sound.ts` 的 `MIX`（音量和音高浮动），然后在 `game.ts` 里触发。
+- 不要为声音加消息。它们都从已有的消息和状态里推出来：攻击和挨打跟着 `hit`，自己喝药水、捡东西、买卖靠比较前后两次的背包（`inventorySound`），换武器跟着 `weapon`，倒下和复活看快照里的状态。`hit`、`heal` 积压时会被丢掉，那一下就没有声音，这是可以接受的。
+- 和自己直接有关的声音用原本的音量，别人的经过 `Game.playAt` 按距离变小（`distanceVolume`），超过 `HEARING_DISTANCE` 不响。别人和怪物的脚步不响。
+- 浏览器只允许在用户操作之后出声。`SoundPlayer` 在第一次点击或按键时才创建 `AudioContext`，静音时根本不创建；设备没在运行（还没操作过、页面在后台、被系统打断）时 `play` 直接返回，不要改成把声音排进去等恢复，那样它们会攒着一起响。
+- 声音的开关要有按钮（状态栏的“音效”），不能只有 M 键。
+
 ## 线上环境
 
 这台开发机同时也是线上环境，改代码之前要知道：
@@ -136,6 +152,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 
 - **不要提交 `packages/server/.env`**，里面有数据库密码，已经在 `.gitignore` 里。
 - `pnpm dev` 运行时，改动服务器或 `shared` 的文件会让服务器自动重启，在线的玩家会断线（位置、血量和背包会在关闭前保存），怪物全部重新生成，地上的物品消失。
+- 单测里把几只怪物放得比 `MONSTER_SEPARATION_DISTANCE` 还近时，它们一开始追人就会被互相推开，位置不再是算好的那几个点。要精确的位置就把它们隔开放。
 - 单测里要放障碍物时，在 `new World(map)` 之前改 `map.blocked`。`World` 在构造时为怪物复制了一份地图，之后再改，怪物看不到。
 - 数据库和 Redis 可能和别的项目共用同一个实例。只操作 `DATABASE_URL` 指向的库和带 `mmo:` 前缀的键，不要停止或重启这些服务，不要执行 `DROP`、`TRUNCATE`、`FLUSHALL`。
 - 测试时创建的账号用完要删掉。压测脚本的“机器人N”账号用的是公开的默认密码，只能出现在本地环境。

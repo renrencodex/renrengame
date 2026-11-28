@@ -360,6 +360,12 @@ body {
   }
 }
 
+/* 声音关着的时候按钮变暗，上面的字是“静音”。 */
+.hud-sound.off {
+  outline-color: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.45);
+}
+
 .hud-potion-count {
   font-weight: 600;
 }

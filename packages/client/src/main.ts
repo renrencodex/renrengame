@@ -18,6 +18,7 @@ import { loadCharacterAssets } from './entities';
 import { Game } from './game';
 import { Hud } from './hud';
 import { Net } from './net';
+import { SoundPlayer } from './sound';
 
 /**
  * 遮罩层的三种状态：
@@ -30,7 +31,7 @@ type View = 'login' | 'resume' | 'ended';
 const CONTROLS =
   '点击地面移动，按住可以连续移动；点击怪物攻击；怪物掉的东西走到旁边就会捡起来；' +
   '点药水按钮（或按 1）喝治疗药水，点“背包”（或按 B）装备捡到的武器；点出生点旁边的商人买卖东西；' +
-  '滚轮或双指捏合调节镜头远近。';
+  '滚轮或双指捏合调节镜头远近；点“音效”（或按 M）开关声音。';
 
 const HINTS: Record<View, string> = {
   login: `登录或注册后进入世界。${CONTROLS}`,
@@ -49,6 +50,14 @@ const primaryButton = document.getElementById('primary-button') as HTMLButtonEle
 const secondaryButton = document.getElementById('secondary-button') as HTMLButtonElement;
 const message = document.getElementById('overlay-message') as HTMLElement;
 const hud = new Hud(document.getElementById('hud') as HTMLElement, document.getElementById('banner') as HTMLElement);
+// 声音从登录页就准备着：浏览器要等用户点过、按过键才让出声，登录的那一下正好算数。
+const sound = new SoundPlayer();
+hud.setSoundOn(!sound.muted);
+hud.onToggleSound = () => {
+  sound.setMuted(!sound.muted);
+  hud.setSoundOn(!sound.muted);
+};
+hud.onPanelSound = () => sound.play('click');
 
 let view: View = 'login';
 let busy = false;
@@ -154,7 +163,7 @@ async function enterWorld(): Promise<void> {
       return;
     }
     try {
-      game = new Game(app, net, hud, assets.characters, assets.items, msg.selfId, msg.seed);
+      game = new Game(app, net, hud, sound, assets.characters, assets.items, msg.selfId, msg.seed);
       overlay.hidden = true;
     } catch (err) {
       console.error(err);
