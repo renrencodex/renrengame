@@ -38,7 +38,7 @@ import { SnapshotBuffer } from './interpolation';
 import type { Sample } from './interpolation';
 import { LocalPlayer } from './localPlayer';
 import type { Net } from './net';
-import { pickEntity } from './picking';
+import { pickEntity, screenPickCandidate } from './picking';
 import type { PickCandidate } from './picking';
 import { WorldScene } from './scene';
 import { distanceVolume, inventorySound } from './sound';
@@ -484,18 +484,10 @@ export class Game {
     /** 一个从地面 (x, z) 立起来、高 h 的目标，在屏幕上占的位置。 */
     const add = (id: number, x: number, z: number, h: number): void => {
       v.set(x, 0, z).project(camera);
-      if (v.z < -1 || v.z > 1) return;
-      const footX = (v.x + 1) * 0.5 * width;
-      const footY = (1 - v.y) * 0.5 * height;
+      const foot = { x: v.x, y: v.y, z: v.z };
       v.set(x, h, z).project(camera);
-      const headX = (v.x + 1) * 0.5 * width;
-      const headY = (1 - v.y) * 0.5 * height;
-      candidates.push({
-        id,
-        x: (footX + headX) / 2,
-        y: (footY + headY) / 2,
-        radius: Math.max(MIN_PICK_RADIUS, Math.hypot(headX - footX, headY - footY) * 0.6),
-      });
+      const candidate = screenPickCandidate(id, foot, { x: v.x, y: v.y, z: v.z }, width, height, MIN_PICK_RADIUS);
+      if (candidate) candidates.push(candidate);
     };
     for (const [id, remote] of this.remotes) {
       if (remote.kind !== 'monster' || remote.dead) continue;
