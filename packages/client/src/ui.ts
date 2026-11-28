@@ -1,4 +1,9 @@
-export type UiIcon = 'crest' | 'gold' | 'potion' | 'bag' | 'sound' | 'mute' | 'sword' | 'shop' | 'close';
+import { ITEMS, POTION_HEAL } from '@mmo/shared';
+import type { ItemId } from '@mmo/shared';
+
+type UiIcon = ItemId | 'crest' | 'bag' | 'sound' | 'mute' | 'fist' | 'shop' | 'close' | 'skull';
+
+export type PlayerPortrait = 'male' | 'female';
 
 /** 创建一枚来自本地 SVG 精灵图的图标。 */
 export function uiIcon(name: UiIcon, extraClass = ''): SVGSVGElement {
@@ -13,4 +18,25 @@ export function uiIcon(name: UiIcon, extraClass = ''): SVGSVGElement {
   use.setAttribute('href', `${import.meta.env.BASE_URL}ui/icons.svg#${name}`);
   icon.append(use);
   return icon;
+}
+
+export function itemIcon(item: ItemId): HTMLElement {
+  const icon = document.createElement('span');
+  icon.className = `item-icon ${item}`;
+  icon.append(uiIcon(item));
+  return icon;
+}
+
+export function itemNote(item: ItemId): string {
+  const weapon = ITEMS[item].weapon;
+  if (weapon) return `攻击力 +${weapon.damage}`;
+  if (item === 'potion') return `恢复 ${POTION_HEAL} 点生命`;
+  return '';
+}
+
+export function uiText(className: string, content: string): HTMLElement {
+  const element = document.createElement('span');
+  element.className = className;
+  element.textContent = content;
+  return element;
 }

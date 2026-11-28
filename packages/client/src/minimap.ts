@@ -1,0 +1,122 @@
+import { merchantPosition, mulberry32, SAFE_ZONE_RADIUS } from '@mmo/shared';
+import type { GameMap, Point } from '@mmo/shared';
+import { uiText } from './ui';
+
+const RADIUS = 32;
+const SIDE = 256;
+const TERRAIN_SCALE = 3;
+const UPDATE_MS = 100;
+
+/** 地图标记留一点边距，避免标记的一半被圆框裁掉。 */
+export function minimapMarker(x: number, z: number, point: Point): Point | null {
+  const dx = point.x - x;
+  const dz = point.z - z;
+  return Math.hypot(dx, dz) <= RADIUS - 3 ? { x: dx / RADIUS, z: dz / RADIUS } : null;
+}
+
+/** 正北朝上的局部地形图，底图只在进入世界时生成一次。 */
+export class Minimap {
+  readonly element = document.createElement('section');
+  private readonly canvas = document.createElement('canvas');
+  private readonly ctx = this.canvas.getContext('2d');
+  private terrain: HTMLCanvasElement | null = null;
+  private merchant: Point = { x: 0, z: 0 };
+  private lastPaint = -Infinity;
+  private lastX = -Infinity;
+  private lastZ = -Infinity;
+  private lastYaw = -Infinity;
+
+  constructor() {
+    this.element.className = 'minimap';
+    this.element.setAttribute('aria-label', '附近地形，青色圆环是安全区，金色标记是商人');
+    this.canvas.width = SIDE;
+    this.canvas.height = SIDE;
+    this.canvas.setAttribute('aria-hidden', 'true');
+    this.element.append(this.canvas, uiText('minimap-north', '北'));
+  }
+
+  setMap(map: GameMap): void {
+    this.terrain = terrainImage(map);
+    this.merchant = merchantPosition(map.size);
+    this.lastPaint = this.lastX = this.lastZ = this.lastYaw = -Infinity;
+  }
+
+  update(now: number, x: number, z: number, yaw: number): void {
+    const { ctx, terrain } = this;
+    if (!ctx || !terrain || now - this.lastPaint < UPDATE_MS) return;
+    if (x === this.lastX && z === this.lastZ && yaw === this.lastYaw) return;
+    this.lastPaint = now;
+    this.lastX = x;
+    this.lastZ = z;
+    this.lastYaw = yaw;
+
+    const half = SIDE / 2;
+    const scale = half / RADIUS;
+    const side = (terrain.width / TERRAIN_SCALE) * scale;
+    ctx.fillStyle = '#182520';
+    ctx.fillRect(0, 0, SIDE, SIDE);
+    ctx.drawImage(terrain, half - x * scale, half - z * scale, side, side);
+
+    const marker = minimapMarker(x, z, this.merchant);
+    if (marker) {
+      ctx.save();
+      ctx.translate(half + marker.x * half, half + marker.z * half);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = '#f5c96d';
+      ctx.strokeStyle = '#271a0a';
+      ctx.lineWidth = 2;
+      ctx.fillRect(-5, -5, 10, 10);
+      ctx.strokeRect(-5, -5, 10, 10);
+      ctx.restore();
+    }
+
+    // 人物模型朝 +Z，正北地图上 +Z 指向下方。
+    ctx.save();
+    ctx.translate(half, half);
+    ctx.rotate(Math.PI - yaw);
+    ctx.beginPath();
+    ctx.moveTo(0, -12);
+    ctx.lineTo(7, 8);
+    ctx.lineTo(0, 5);
+    ctx.lineTo(-7, 8);
+    ctx.closePath();
+    ctx.fillStyle = '#fff2b4';
+    ctx.strokeStyle = '#2b2617';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function terrainImage(map: GameMap): HTMLCanvasElement | null {
+  const terrain = document.createElement('canvas');
+  terrain.width = terrain.height = map.size * TERRAIN_SCALE;
+  const ctx = terrain.getContext('2d');
+  if (!ctx) return null;
+  ctx.scale(TERRAIN_SCALE, TERRAIN_SCALE);
+  ctx.fillStyle = '#546643';
+  ctx.fillRect(0, 0, map.size, map.size);
+
+  const random = mulberry32(map.seed);
+  for (let i = 0; i < map.size * 5; i++) {
+    ctx.fillStyle = random() < 0.5 ? '#b4b57a20' : '#26363328';
+    ctx.fillRect(random() * map.size, random() * map.size, 1 + random() * 3, 1 + random() * 2);
+  }
+
+  for (const o of map.obstacles) {
+    ctx.fillStyle = '#29372b';
+    ctx.fillRect(o.x + 0.45, o.z + 0.45, o.w, o.d);
+    ctx.fillStyle = o.h > 2.5 ? '#ada991' : '#83907a';
+    ctx.fillRect(o.x, o.z, o.w, o.d);
+  }
+
+  ctx.beginPath();
+  ctx.arc(map.size / 2, map.size / 2, SAFE_ZONE_RADIUS, 0, Math.PI * 2);
+  ctx.fillStyle = '#62cfa32c';
+  ctx.strokeStyle = '#9cdac69e';
+  ctx.lineWidth = 0.55;
+  ctx.fill();
+  ctx.stroke();
+  return terrain;
+}

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
     <title>人人大陆</title>
   </head>
   <body>
@@ -10,44 +10,38 @@
     <div id="hud" hidden></div>
     <div id="banner" hidden></div>
     <div id="overlay">
-      <form id="auth-form" class="parchment-scroll">
-        <div class="auth-brand">
-          <div class="auth-emblem" aria-hidden="true">
-            <svg viewBox="0 0 64 64"><use href="/ui/icons.svg#crest"></use></svg>
+      <div class="login-shell">
+        <header class="auth-brand">
+          <svg class="auth-emblem" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+            <use href="%BASE_URL%ui/icons.svg#crest"></use>
+          </svg>
+          <h1>人人大陆</h1>
+          <div class="auth-ornament" aria-hidden="true"></div>
+        </header>
+        <form id="auth-form" aria-label="账号登录">
+          <div id="login-fields">
+            <label class="auth-field">
+              <span>账号名</span>
+              <input id="username-input" type="text" maxlength="16" autocomplete="username" placeholder="2–16 个字符" />
+            </label>
+            <label class="auth-field">
+              <span>密码</span>
+              <input id="password-input" type="password" maxlength="72" autocomplete="current-password" placeholder="至少 6 位" />
+            </label>
           </div>
-          <div>
-            <p class="auth-kicker">冒险者通行证</p>
-            <h1>人人大陆</h1>
-            <p class="auth-subtitle">踏入荒野，书写你的传说</p>
+          <p id="welcome-back" hidden></p>
+          <div class="auth-actions">
+            <button id="primary-button" type="submit">登录</button>
+            <button id="secondary-button" type="button">注册新账号</button>
           </div>
-        </div>
-        <div id="login-fields">
-          <label class="auth-field">
-            <span>账号名</span>
-            <input id="username-input" type="text" maxlength="16" autocomplete="username" placeholder="2–16 个字符" />
-          </label>
-          <label class="auth-field">
-            <span>密码</span>
-            <input
-              id="password-input"
-              type="password"
-              maxlength="72"
-              autocomplete="current-password"
-              placeholder="至少 6 位"
-            />
-          </label>
-        </div>
-        <p id="welcome-back" hidden></p>
-        <button id="primary-button" type="submit">登录</button>
-        <button id="secondary-button" type="button">注册新账号</button>
-        <p id="overlay-message" role="status" aria-live="polite"></p>
-        <details id="controls-guide">
-          <summary>操作指南</summary>
-          <p>
-            点击或按住地面移动，点击怪物攻击；靠近掉落物会自动拾取。用药水恢复生命，在背包中装备武器，前往出生点旁的商人买卖物品。滚轮或双指捏合可调节镜头。
-          </p>
-        </details>
-      </form>
+          <p id="overlay-message" role="status"></p>
+          <details id="controls-guide">
+            <summary>操作指南</summary>
+            <p>点击或按住地面移动，点击怪物攻击。靠近掉落物会自动拾取，点击商人可以前往交易。</p>
+            <p>滚轮或双指捏合调节镜头。快捷键 1 使用药水、B 打开背包、M 开关音效。</p>
+          </details>
+        </form>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

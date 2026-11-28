@@ -51,6 +51,9 @@ interface Remote {
   view: EntityView;
   buffer: SnapshotBuffer;
   kind: CharacterKind;
+  name: string;
+  hp: number;
+  maxHp: number;
   dead: boolean;
   /** 最新快照里的位置。画面上显示的是插值后稍早一点的位置，追击要用最新的。 */
   x: number;
@@ -173,6 +176,7 @@ export class Game {
 
     // 刚进入世界时，服务器那边药水先走一轮冷却。
     this.potionReadyAt = performance.now() + POTION_COOLDOWN_MS;
+    this.hud.setMap(map);
     this.hud.setPotionCooldown(this.potionReadyAt);
     this.hud.onUsePotion = () => this.usePotion();
     // 换武器由服务器判定，这里只把请求发出去；结果会随背包和 weapon 消息回来。
@@ -228,7 +232,9 @@ export class Game {
           remote.x = x;
           remote.z = z;
           // 血量和死亡不做插值，收到就生效。
+          remote.hp = hp;
           remote.view.setHp(hp);
+          if (id === this.targeting.targetId) this.hud.setTargetHp(hp, remote.maxHp);
           if (this.setRemoteDead(remote, state === STATE_DEAD) && remote.dead) {
             const cue = remote.kind === 'monster' ? 'monsterDeath' : 'playerDeath';
             // 自己正在打的那只倒下时，声音不按距离减小。
@@ -269,8 +275,10 @@ export class Game {
     this.hud.onUnequip = null;
     this.hud.onBuy = null;
     this.hud.onSell = null;
-    this.hud.closeShop();
+    this.hud.closePanels();
     this.hud.setBanner(null);
+    this.hud.hideTarget();
+    this.hud.hide();
   }
 
   private onEnter(info: EntityInfo): void {
@@ -284,6 +292,7 @@ export class Game {
       if (!this.selfView) {
         this.selfView = new EntityView(info, true, this.assets, this.itemAssets);
         this.world.scene.add(this.selfView.root);
+        this.hud.setPlayer(info.name, this.selfView.portrait);
       }
       this.selfView.setWeapon(info.weapon ?? null);
       this.selfView.place(info.x, info.z);
@@ -299,6 +308,9 @@ export class Game {
         view: new EntityView(info, false, this.assets, this.itemAssets),
         buffer: new SnapshotBuffer(),
         kind: info.kind,
+        name: info.name,
+        hp: info.hp,
+        maxHp: info.maxHp,
         dead: false,
         x: info.x,
         z: info.z,
@@ -308,6 +320,7 @@ export class Game {
     }
     remote.x = info.x;
     remote.z = info.z;
+    remote.hp = info.hp;
     remote.view.place(info.x, info.z);
     remote.view.setHp(info.hp);
     remote.view.setWeapon(info.weapon ?? null);
@@ -511,7 +524,10 @@ export class Game {
       return true;
     }
     if (id !== this.targeting.targetId) {
+      const remote = this.remotes.get(id);
+      if (!remote) return false;
       this.targeting.set(id);
+      this.hud.showTarget(remote.name, remote.hp, remote.maxHp);
       this.net.send({ t: 'target', id });
     }
     return true;
@@ -564,6 +580,7 @@ export class Game {
     if (this.targeting.targetId === 0) return;
     this.targeting.clear();
     this.ring.hide();
+    this.hud.hideTarget();
     if (notify) this.net.send({ t: 'target', id: 0 });
   }
 
@@ -656,6 +673,7 @@ export class Game {
       monsters,
       x: this.local.x,
       z: this.local.z,
+      yaw: this.selfView?.root.rotation.y ?? 0,
       corrections: this.local.corrections,
     });
   };

@@ -204,6 +204,8 @@ systemctl restart renrengame     # 重启（改了 /etc/renrengame/env 之后）
 
 ## 素材
 
+登录背景采用美国国家美术馆公开的公有领域画作 [The Departure](https://www.nga.gov/artworks/166439-departure)（Thomas Cole，1837 年）。界面头像从下方的人物模型渲染。
+
 `packages/client/public/models/` 里的模型都是用 [Quaternius](https://quaternius.com) 的免费素材包加工出来的：人物是 `human_male.glb` 和 `human_female.glb`，物品是 `item_gold.glb`、`item_potion.glb` 和 `item_sword.glb`（剑在地上和拿在手里用的是同一个模型）。
 
 | 素材包 | 用到的内容 | 授权 |

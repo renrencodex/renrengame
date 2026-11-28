@@ -28,12 +28,6 @@ import { SoundPlayer } from './sound';
  */
 type View = 'login' | 'resume' | 'ended';
 
-const HINTS: Record<View, string> = {
-  login: '登录或注册后进入世界。',
-  resume: '准备好后，继续你的冒险。',
-  ended: '',
-};
-
 const app = document.getElementById('app') as HTMLElement;
 const overlay = document.getElementById('overlay') as HTMLElement;
 const form = document.getElementById('auth-form') as HTMLFormElement;
@@ -58,8 +52,6 @@ let view: View = 'login';
 let busy = false;
 let session: AuthSuccess | null = loadSession();
 let assetsPromise: ReturnType<typeof loadAssets> | null = null;
-
-hud.setPlayerName(session?.name ?? '冒险者');
 
 /** 人物和物品的模型一起加载。哪个加载失败，哪个就用简单的形状代替，不影响进入游戏。 */
 async function loadAssets() {
@@ -90,7 +82,6 @@ secondaryButton.addEventListener('click', () => {
 
 function show(next: View, text?: string): void {
   view = next;
-  hud.setPlayerName(session?.name ?? '冒险者');
   overlay.hidden = false;
   fields.hidden = next !== 'login';
   welcomeBack.hidden = next !== 'resume';
@@ -98,9 +89,8 @@ function show(next: View, text?: string): void {
   primaryButton.textContent = next === 'login' ? '登录' : next === 'resume' ? '进入世界' : '重新进入';
   secondaryButton.hidden = next === 'ended';
   secondaryButton.textContent = next === 'login' ? '注册新账号' : '换个账号';
-  message.textContent = text ?? HINTS[next];
+  message.textContent = text ?? '';
   setBusy(false);
-  if (next === 'login') usernameInput.focus();
 }
 
 function setBusy(value: boolean): void {
@@ -110,7 +100,6 @@ function setBusy(value: boolean): void {
 
 function forgetSession(): void {
   session = null;
-  hud.setPlayerName('冒险者');
   clearSession();
 }
 
@@ -139,7 +128,6 @@ async function authenticate(action: 'login' | 'register'): Promise<void> {
   }
   passwordInput.value = '';
   session = { token: outcome.token, name: outcome.name };
-  hud.setPlayerName(session.name);
   saveSession(session);
   await enterWorld();
 }

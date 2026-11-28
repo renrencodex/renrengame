@@ -5,6 +5,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import type { CharacterKind, ItemId } from '@mmo/shared';
 import { createHeldWeapon } from './drops';
 import type { ItemAssets } from './drops';
+import type { PlayerPortrait } from './ui';
 
 /** 一个人物模型：骨骼、网格和它自带的动作。同一个模型的所有角色共用几何体和动作数据。 */
 export interface CharacterModel {
@@ -67,7 +68,7 @@ type TintSlot = 'Skin' | 'Shirt' | 'Pants' | 'Boots' | 'Hair';
 
 /** 一个角色的外观：用哪个模型、各部分什么颜色。 */
 interface Look {
-  model: 'male' | 'female';
+  model: PlayerPortrait;
   size: number;
   colors: Partial<Record<TintSlot, number>>;
   /** 没有模型时胶囊体的颜色。 */
@@ -167,6 +168,7 @@ let noseGeometry: THREE.BoxGeometry | undefined;
  */
 export class EntityView {
   readonly root = new THREE.Group();
+  readonly portrait: PlayerPortrait;
   /** 角色的身高，点选和飘字用它确定位置。 */
   readonly height: number;
   private readonly label: CSS2DObject;
@@ -211,6 +213,7 @@ export class EntityView {
     const isMonster = info.kind === 'monster';
     const isNpc = info.kind === 'npc';
     const look = isMonster ? MONSTER_LOOK : isNpc ? MERCHANT_LOOK : playerLook(info.name);
+    this.portrait = look.model;
     const source = assets?.[look.model];
     this.height = (source?.height ?? FALLBACK_HEIGHT) * look.size;
     this.maxHp = info.maxHp;

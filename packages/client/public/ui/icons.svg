@@ -1,44 +1,79 @@
 <svg xmlns="http://www.w3.org/2000/svg">
   <symbol id="crest" viewBox="0 0 64 64">
-    <path fill="#2b180e" stroke="#d0a34b" stroke-width="3" d="M32 4 53 12v17c0 14-8.7 24.6-21 31C19.7 53.6 11 43 11 29V12z" />
-    <path fill="#9f2f27" stroke="#f0cd74" stroke-width="2" d="M32 9 47 15v14c0 10.4-5.8 18.6-15 24-9.2-5.4-15-13.6-15-24V15z" />
-    <path fill="#ead89d" d="m30 16 4-3 1.4 20.2 6.6 3.3-1.7 3.4-6.8-2.5L32 47l-2-9.6-6.8 2.5-1.7-3.4 6.6-3.3z" />
+    <linearGradient id="crest-metal" x2="0" y2="1">
+      <stop stop-color="#fff1ad"/><stop offset=".5" stop-color="#b88d47"/><stop offset="1" stop-color="#745024"/>
+    </linearGradient>
+    <radialGradient id="crest-enamel" cx=".38" cy=".27" r=".8">
+      <stop stop-color="#437b73"/><stop offset="1" stop-color="#142322"/>
+    </radialGradient>
+    <path d="M32 2 61 23l-8 27-21 12L11 50 3 23z" fill="#171714" stroke="#3b2c19" stroke-width="2"/>
+    <path d="M32 5 57 24l-7 24-18 11-18-11-7-24z" fill="url(#crest-enamel)" stroke="url(#crest-metal)" stroke-width="3.5"/>
+    <path d="M32 10 52 25l-6 20-14 9-14-9-6-20z" fill="none" stroke="#d7bf7e" stroke-opacity=".5"/>
+    <path d="M32 13l4 14 12 5-12 4-4 14-4-14-12-4 12-5z" fill="url(#crest-metal)" stroke="#3b2b1b" stroke-width="1.4"/>
+    <path d="M32 24l4 8-4 8-4-8z" fill="#96e0c4" stroke="#243d35"/>
   </symbol>
   <symbol id="gold" viewBox="0 0 32 32">
-    <circle cx="16" cy="16" r="12.5" fill="#d79d2f" stroke="#5c3510" stroke-width="2" />
-    <circle cx="16" cy="16" r="8.5" fill="none" stroke="#f5d779" stroke-width="1.6" />
-    <path fill="#f7e5a0" d="M10 10.5c3.2-3 8.7-3.1 11.8-.4l-2.2 1.7c-2.1-1.3-5.4-1.2-7.3.7z" />
+    <linearGradient id="coin" x2=".8" y2="1">
+      <stop stop-color="#ffebac"/><stop offset=".44" stop-color="#e3b752"/><stop offset="1" stop-color="#916025"/>
+    </linearGradient>
+    <circle cx="16.5" cy="17" r="13" fill="#82551f" stroke="#3a2613" stroke-width="1.5"/>
+    <circle cx="15.5" cy="15.5" r="11.8" fill="url(#coin)" stroke="#ffe6a2" stroke-width="1.3"/>
+    <circle cx="15.5" cy="15.5" r="8.7" fill="none" stroke="#8c5f2a"/>
+    <path d="m15.5 9 4.6 6.5-4.6 6.5-4.6-6.5z" fill="#f7dd8e" stroke="#8c5f2a" stroke-width="1.1"/>
   </symbol>
   <symbol id="potion" viewBox="0 0 32 32">
-    <path fill="#b6a077" stroke="#4b2b16" stroke-width="1.8" d="M12 3h8v7l4.3 5.4c4.5 5.7.5 13.6-6.8 13.6h-3c-7.3 0-11.3-7.9-6.8-13.6L12 10z" />
-    <path fill="#a62f2c" d="M8.8 18.2h14.4c2.1 5-.8 8.5-5.9 8.5h-2.6c-5.1 0-8-3.5-5.9-8.5" />
-    <path fill="#ef8a71" d="M11.2 19.8h3.1c-.7 2.7-.1 4.2 1 5.2-3.2-.2-4.8-2.3-4.1-5.2" />
-    <path fill="none" stroke="#ead6a8" stroke-width="2" d="M11 6h10" />
+    <linearGradient id="potion-glass" x2="1" y2="1">
+      <stop stop-color="#f5e8ce"/><stop offset=".42" stop-color="#ae7e65"/><stop offset="1" stop-color="#472226"/>
+    </linearGradient>
+    <radialGradient id="potion-liquid" cx=".36" cy=".16" r=".84">
+      <stop stop-color="#ffad83"/><stop offset=".4" stop-color="#e85547"/><stop offset="1" stop-color="#7a1728"/>
+    </radialGradient>
+    <path d="M12 6h8v5l4.7 5.4c4.6 5.4 1 13-6 13h-5.4c-7 0-10.6-7.6-6-13L12 11z" fill="url(#potion-glass)" stroke="#47272a" stroke-width="1.5"/>
+    <path d="M8.7 18.5c3-1.7 5.3-.2 7.7 0 2.4.2 4.2-.2 6.9-1 3.3 4.7.4 9.8-5 9.8h-4.7c-4.9 0-7.7-4.5-4.9-8.8z" fill="url(#potion-liquid)"/>
+    <path d="M11.7 19.2c-1.1 2-.6 4.3 1.5 5.4M9 16.6l3.2-3.7" fill="none" stroke="#fff1da" stroke-opacity=".68" stroke-linecap="round" stroke-width="1.25"/>
+    <path d="m11 3 10 0 .5 4.1h-11z" fill="#c89d63" stroke="#5e3d2a" stroke-width="1.4"/>
+    <path d="M12 8h8" stroke="#fff0cd" stroke-width="1.4"/>
   </symbol>
   <symbol id="bag" viewBox="0 0 32 32">
-    <path fill="#74451f" stroke="#2d190d" stroke-width="2" d="M8.3 11h15.4l3.1 15.8H5.2z" />
-    <path fill="none" stroke="#d5a94e" stroke-width="2.2" d="M11 12V9.4C11 6.4 13.2 4 16 4s5 2.4 5 5.4V12" />
-    <path fill="#c38d36" d="M14 16h4v8h-4z" />
-  </symbol>
-  <symbol id="sound" viewBox="0 0 32 32">
-    <path fill="currentColor" d="M5 12h6l7-6v20l-7-6H5z" />
-    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2.4" d="M21 11c2.8 2.4 2.8 7.6 0 10m3-13c5.1 4.4 5.1 11.6 0 16" />
-  </symbol>
-  <symbol id="mute" viewBox="0 0 32 32">
-    <path fill="currentColor" d="M5 12h6l7-6v20l-7-6H5z" />
-    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2.5" d="m22 12 6 8m0-8-6 8" />
+    <linearGradient id="bag-leather" x2="1" y2="1">
+      <stop stop-color="#d29a52"/><stop offset=".45" stop-color="#8b5430"/><stop offset="1" stop-color="#3f251c"/>
+    </linearGradient>
+    <path d="M11 11V8a5 5 0 0 1 10 0v3" fill="none" stroke="#dcb977" stroke-width="2.3"/>
+    <path d="M7.5 9h17L28 26a2.5 2.5 0 0 1-2.5 2.5h-19A2.5 2.5 0 0 1 4 26z" fill="url(#bag-leather)" stroke="#2f1c14" stroke-width="1.6"/>
+    <path d="M7.5 9h17L23 16l-7 3-7-3z" fill="#ab763d" stroke="#563321" stroke-width="1.4"/>
+    <path d="M8 12h16M7.5 24h17" stroke="#e0a45a" stroke-opacity=".58" stroke-dasharray="1.8 1.3"/>
+    <path d="M13.7 15.8h4.6v7h-4.6z" fill="#e4b86b" stroke="#4d2e1a" stroke-width="1.3"/>
   </symbol>
   <symbol id="sword" viewBox="0 0 32 32">
-    <path fill="#d8e0e2" stroke="#44545b" stroke-width="1.2" d="M24.5 3 29 3.5l-13.7 16-3.1-3.1z" />
-    <path fill="#d2a44d" stroke="#5e3712" stroke-width="1.2" d="m9.4 15 7.6 7.6-2.6 2.6-7.6-7.6z" />
-    <path fill="#6d4320" d="m9 21 3 3-6.2 5H3v-2.8z" />
+    <linearGradient id="steel" x2="1" y2="1">
+      <stop stop-color="#f3f4d8"/><stop offset=".5" stop-color="#c6d1c9"/><stop offset="1" stop-color="#738994"/>
+    </linearGradient>
+    <path d="m23.8 3 5.3.3-.5 5.4-12.7 13.4-5-5.1z" fill="url(#steel)" stroke="#485757" stroke-width="1.35"/>
+    <path d="M27.6 4.5 14.5 19" stroke="#f8ffe6" stroke-width="1.25"/>
+    <path d="m9.2 14.9 8.2 8.3-2.6 2.6-8.3-8.2z" fill="url(#coin)" stroke="#674820" stroke-width="1.3"/>
+    <path d="m8.4 20.7 3 3-5.5 5.6-3.2.2.1-3.2z" fill="#9b6440" stroke="#4c3021" stroke-width="1.35"/>
+  </symbol>
+  <symbol id="fist" viewBox="0 0 32 32">
+    <path d="m10 27-5-9a4 4 0 0 1 2-5l3-1V6a2.5 2.5 0 0 1 5 0v4-5a2.5 2.5 0 0 1 5 0v5-3a2.5 2.5 0 0 1 5 0v5-1a2.5 2.5 0 0 1 5 0v8l-5 8z" fill="#bb9471" stroke="#432d26" stroke-width="1.7"/>
+    <path d="M9.5 19 15 12h4M15 10h10M10 25h15v4H10z" fill="none" stroke="#624334" stroke-width="2" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="sound" viewBox="0 0 32 32">
+    <path fill="currentColor" d="M4 12h6l8-6v20l-8-6H4z"/>
+    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M21 11c3 2.4 3 7.6 0 10m3-13c5.1 4.4 5.1 11.6 0 16"/>
+  </symbol>
+  <symbol id="mute" viewBox="0 0 32 32">
+    <path fill="currentColor" d="M4 12h6l8-6v20l-8-6H4z"/>
+    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="m22 12 7 8m0-8-7 8"/>
   </symbol>
   <symbol id="shop" viewBox="0 0 32 32">
-    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M16 4v23M7 8h18" />
-    <path fill="none" stroke="currentColor" stroke-width="2" d="m9 8-5 9h10zm14 0-5 9h10z" />
-    <path fill="currentColor" d="M4 17h10c0 3-2 5-5 5s-5-2-5-5m14 0h10c0 3-2 5-5 5s-5-2-5-5M10 27h12v2H10z" />
+    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2" d="M16 4v23M7 8h18m-16 0-5 9h10zm14 0-5 9h10z"/>
+    <path fill="currentColor" d="M4 17h10c0 3-2 5-5 5s-5-2-5-5m14 0h10c0 3-2 5-5 5s-5-2-5-5M10 27h12v2H10z"/>
+  </symbol>
+  <symbol id="skull" viewBox="0 0 32 32">
+    <path d="M16 4C8 4 5 9 5 16c0 3.6 2 6.7 6 7.2l.9 4.8h8.2l.9-4.8c4-.5 6-3.6 6-7.2C27 9 24 4 16 4z" fill="currentColor"/>
+    <path d="M9 14c2-2 5.4-.7 5.1 2-.3 2.9-5.7 3.1-5.7.2zm14 0c-2-2-5.4-.7-5.1 2 .3 2.9 5.7 3.1 5.7.2zM16 18l1.3 3h-2.6z" fill="#211e1b"/>
   </symbol>
   <symbol id="close" viewBox="0 0 24 24">
-    <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2.6" d="m6 6 12 12M18 6 6 18" />
+    <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"/>
   </symbol>
 </svg>
