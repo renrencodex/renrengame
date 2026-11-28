@@ -5,6 +5,7 @@ import {
   encode,
   MAX_NAME_LENGTH,
   MAX_TOKEN_LENGTH,
+  MAX_TRADE_COUNT,
   sanitizeName,
 } from '../src/index';
 
@@ -16,6 +17,10 @@ describe('protocol', () => {
     expect(decodeClientMsg(encode({ t: 'target', id: 17 }))).toEqual({ t: 'target', id: 17 });
     expect(decodeClientMsg(encode({ t: 'target', id: 0 }))).toEqual({ t: 'target', id: 0 });
     expect(decodeClientMsg(encode({ t: 'use', item: 'potion' }))).toEqual({ t: 'use', item: 'potion' });
+    expect(decodeClientMsg(encode({ t: 'equip', item: 'sword' }))).toEqual({ t: 'equip', item: 'sword' });
+    expect(decodeClientMsg(encode({ t: 'unequip' }))).toEqual({ t: 'unequip' });
+    expect(decodeClientMsg(encode({ t: 'buy', item: 'potion', count: 2 }))).toEqual({ t: 'buy', item: 'potion', count: 2 });
+    expect(decodeClientMsg(encode({ t: 'sell', item: 'sword', count: 1 }))).toEqual({ t: 'sell', item: 'sword', count: 1 });
   });
 
   it('拒绝格式不对的客户端消息', () => {
@@ -41,9 +46,27 @@ describe('protocol', () => {
       '{"t":"target","id":1.5}',
       '{"t":"target","id":1e30}',
       '{"t":"use"}',
-      '{"t":"use","item":"sword"}',
+      '{"t":"use","item":"wand"}',
       '{"t":"use","item":"toString"}',
       '{"t":"use","item":1}',
+      '{"t":"equip"}',
+      '{"t":"equip","item":"wand"}',
+      '{"t":"equip","item":"hasOwnProperty"}',
+      '{"t":"equip","item":null}',
+      '{"t":"buy"}',
+      '{"t":"buy","item":"potion"}',
+      '{"t":"buy","item":"wand","count":1}',
+      '{"t":"buy","item":"potion","count":0}',
+      '{"t":"buy","item":"potion","count":-1}',
+      '{"t":"buy","item":"potion","count":1.5}',
+      '{"t":"buy","item":"potion","count":"2"}',
+      '{"t":"buy","item":"potion","count":21}',
+      '{"t":"buy","item":"potion","count":1e30}',
+      '{"t":"sell","item":"sword"}',
+      '{"t":"sell","item":"constructor","count":1}',
+      '{"t":"sell","item":"sword","count":0}',
+      '{"t":"sell","item":"sword","count":null}',
+      '{"t":"sell","item":"sword","count":21}',
     ]) {
       expect(decodeClientMsg(raw), raw).toBeNull();
     }
@@ -51,6 +74,20 @@ describe('protocol', () => {
 
   it('解码时丢掉多余的字段', () => {
     expect(decodeClientMsg('{"t":"moveTo","x":1,"z":2,"speed":999}')).toEqual({ t: 'moveTo', x: 1, z: 2 });
+    expect(decodeClientMsg('{"t":"unequip","item":"sword"}')).toEqual({ t: 'unequip' });
+    expect(decodeClientMsg('{"t":"buy","item":"potion","count":2,"price":0}')).toEqual({ t: 'buy', item: 'potion', count: 2 });
+  });
+
+  it('买卖的数量在 1 到单次上限之间', () => {
+    expect(decodeClientMsg('{"t":"buy","item":"potion","count":1}')).toEqual({ t: 'buy', item: 'potion', count: 1 });
+    expect(decodeClientMsg(`{"t":"buy","item":"sword","count":${MAX_TRADE_COUNT}}`)).toEqual({
+      t: 'buy',
+      item: 'sword',
+      count: MAX_TRADE_COUNT,
+    });
+    expect(decodeClientMsg('{"t":"sell","item":"sword","count":3}')).toEqual({ t: 'sell', item: 'sword', count: 3 });
+    // 金币不能买卖，但这要看背包和价格，由服务器的 World 判定；这里只管格式。
+    expect(decodeClientMsg('{"t":"sell","item":"gold","count":1}')).toEqual({ t: 'sell', item: 'gold', count: 1 });
   });
 
   it('服务端消息损坏时返回 null', () => {

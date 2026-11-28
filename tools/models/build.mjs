@@ -7,8 +7,8 @@
 //   Universal Base Characters[Standard]/
 //   Universal Animation Library[Standard]/
 //
-// 输出 human_male.glb 和 human_female.glb，每个文件里有身体、眼睛、眉毛、头发
-// 和游戏用到的几个动作。
+// 输出 human_male.glb 和 human_female.glb，每个文件里有身体、眼睛、眉毛、头发、
+// 右手上挂武器的位置和游戏用到的几个动作。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,7 +33,7 @@ const HAIR_DIR = path.join(BASE, 'Hairstyles/Origin at 0/glTF (Godot)');
 const ANIMATIONS = path.join(sourceDir, 'Universal Animation Library[Standard]/Unreal-Godot/UAL1_Standard.glb');
 
 /** 游戏里用到的动作。 */
-const CLIPS = ['Idle_Loop', 'Jog_Fwd_Loop', 'Punch_Jab', 'Punch_Cross', 'Death01'];
+const CLIPS = ['Idle_Loop', 'Jog_Fwd_Loop', 'Punch_Jab', 'Punch_Cross', 'Sword_Idle', 'Sword_Attack', 'Death01'];
 /** 这些骨头保留位移，其余骨头只保留旋转，骨头的长短以人物自己的为准。 */
 const TRANSLATED_BONES = new Set(['root', 'pelvis']);
 
@@ -64,6 +64,9 @@ const CLOTH_COLORS = {
   Pants: [0.07, 0.08, 0.1, 1],
   Boots: [0.04, 0.03, 0.025, 1],
 };
+/** 握在手里的东西的中心，离手指根部的连线有多远（米）：朝手心一侧、朝指尖一侧。 */
+const GRIP_TOWARD_PALM = 0.03;
+const GRIP_TOWARD_FINGERTIPS = 0.015;
 
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
 
@@ -128,6 +131,34 @@ function angleBetween(a, b) {
   const dot = Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
   return (2 * Math.acos(Math.min(1, dot)) * 180) / Math.PI;
 }
+
+/** 三个互相垂直的单位向量（旋转后的 X、Y、Z 轴）对应的四元数。 */
+function fromAxes(x, y, z) {
+  const trace = x[0] + y[1] + z[2];
+  if (trace > 0) {
+    const s = Math.sqrt(trace + 1) * 2;
+    return [(y[2] - z[1]) / s, (z[0] - x[2]) / s, (x[1] - y[0]) / s, s / 4];
+  }
+  if (x[0] > y[1] && x[0] > z[2]) {
+    const s = Math.sqrt(1 + x[0] - y[1] - z[2]) * 2;
+    return [s / 4, (y[0] + x[1]) / s, (z[0] + x[2]) / s, (y[2] - z[1]) / s];
+  }
+  if (y[1] > z[2]) {
+    const s = Math.sqrt(1 + y[1] - x[0] - z[2]) * 2;
+    return [(y[0] + x[1]) / s, s / 4, (z[1] + y[2]) / s, (z[0] - x[2]) / s];
+  }
+  const s = Math.sqrt(1 + z[2] - x[0] - y[1]) * 2;
+  return [(z[0] + x[2]) / s, (z[1] + y[2]) / s, s / 4, (x[1] - y[0]) / s];
+}
+
+// ---------- 向量 [x, y, z] ----------
+
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const subtract = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const scale = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const normalize = (a) => scale(a, 1 / Math.hypot(...a));
 
 // ---------- 身体 ----------
 
@@ -205,6 +236,37 @@ async function attachHair(doc, file, material) {
     .setRotation(inverse)
     .setTranslation(rotate(inverse, [-x, -y, -z]));
   head.addChild(node);
+}
+
+/**
+ * 在右手的骨头下面加一个空节点 Weapon_R，表示“握在手里的东西”的位置和朝向。
+ * 游戏里把武器模型放到这个节点下面，武器就跟着手动。约定：
+ *   原点 是握住的那一段的中心；
+ *   Y 轴 从小指一侧指向食指一侧，剑身沿这个方向伸出去；
+ *   X 轴 指向指尖的方向，剑刃在 X–Y 平面里。
+ * 位置和朝向都是用站立姿势下手和手指根部的骨头算出来的，男女模型的手大小不同，各算各的。
+ */
+function addWeaponSocket(doc) {
+  const hand = nodeByName(doc, 'hand_r');
+  if (hand.getWorldScale().some((s) => Math.abs(s - 1) > 1e-4)) throw new Error('右手的骨头带缩放，没法直接挂武器');
+  const at = (name) => nodeByName(doc, name).getWorldTranslation();
+  const index = at('index_01_r');
+  const pinky = at('pinky_01_r');
+  const y = normalize(subtract(index, pinky));
+  const toFingers = normalize(subtract(at('middle_01_r'), at('hand_r')));
+  const x = normalize(subtract(toFingers, scale(y, dot(toFingers, y))));
+  // 右手：X × Y 指向手背，手心在反方向。
+  const z = cross(x, y);
+  const center = add(
+    add(scale(add(index, pinky), 0.5), scale(z, -GRIP_TOWARD_PALM)),
+    scale(x, GRIP_TOWARD_FINGERTIPS),
+  );
+  const inverse = conjugate(hand.getWorldRotation());
+  const socket = doc
+    .createNode('Weapon_R')
+    .setRotation(multiply(inverse, fromAxes(x, y, z)))
+    .setTranslation(rotate(inverse, subtract(center, hand.getWorldTranslation())));
+  hand.addChild(socket);
 }
 
 // ---------- 动作 ----------
@@ -337,11 +399,13 @@ async function buildCharacter(spec, animationSource) {
   if (!foundBody) throw new Error('没有找到身体的模型');
 
   await attachHair(doc, path.join(HAIR_DIR, spec.hair), materials.Hair);
+  addWeaponSocket(doc);
   const largestCorrection = copyAnimations(doc, animationSource);
 
   await doc.transform(
     resample(),
-    prune(),
+    // 挂武器的节点是空的，默认会被当成没用的东西清掉。
+    prune({ keepLeaves: true }),
     // 材质不合并：上衣、裤子、鞋要各自换色。
     dedup({ propertyTypes: [PropertyType.ACCESSOR, PropertyType.TEXTURE] }),
     // 位置保持原样，其余属性压成整数，文件更小。

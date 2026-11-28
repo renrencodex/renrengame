@@ -53,6 +53,16 @@ body {
   opacity: 0.45;
 }
 
+/* 商人头上只有名字，没有血条。 */
+.name-label.npc .name-text {
+  outline: 1px solid rgba(233, 200, 255, 0.5);
+  color: #e9c8ff;
+}
+
+.name-label.npc .hp-bar {
+  display: none;
+}
+
 .hp-bar {
   width: 44px;
   height: 4px;
@@ -113,6 +123,10 @@ body {
   color: #ff9a9a;
 }
 
+.loot-text.sword {
+  color: #bfe6ff;
+}
+
 .drop-label {
   padding: 0 5px;
   border-radius: 7px;
@@ -130,6 +144,10 @@ body {
 
 .drop-label.potion {
   color: #ffb3b3;
+}
+
+.drop-label.sword {
+  color: #bfe6ff;
 }
 
 #hud {
@@ -187,7 +205,7 @@ body {
 }
 
 .hud-gold,
-.hud-potion {
+.hud-button {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -200,12 +218,61 @@ body {
   font-size: 13px;
 }
 
-.hud-gold-icon {
+/* 物品的小图标，状态栏和背包里都用。 */
+.item-icon {
+  position: relative;
+  flex: none;
   width: 12px;
   height: 12px;
+}
+
+.item-icon.gold {
   border-radius: 50%;
   background: radial-gradient(circle at 35% 30%, #fff3b0, #f0b429 55%, #a86a00);
   box-shadow: 0 0 0 1px rgba(90, 50, 0, 0.8);
+}
+
+/* 一个小药瓶：圆肚子加上一截瓶颈。 */
+.item-icon.potion {
+  margin-top: 4px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffc4c4, #e03a3a 55%, #8a1414);
+}
+
+.item-icon.potion::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  left: 4px;
+  width: 4px;
+  height: 6px;
+  border-radius: 1px;
+  background: #d9c9a8;
+}
+
+/* 一把斜着的剑：一条长的是剑身，一条短的是护手。 */
+.item-icon.sword::before,
+.item-icon.sword::after {
+  content: '';
+  position: absolute;
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.item-icon.sword::before {
+  top: -3px;
+  left: 5px;
+  width: 2px;
+  height: 18px;
+  background: linear-gradient(#fff0c8, #e0a050 65%, #6a4520 66%);
+}
+
+.item-icon.sword::after {
+  top: 8px;
+  left: 0;
+  width: 8px;
+  height: 2px;
+  background: #c98a3a;
 }
 
 .hud-gold-count {
@@ -213,15 +280,23 @@ body {
   font-weight: 600;
 }
 
-/* 整个状态栏不拦截鼠标，只有这个按钮可以点。 */
-.hud-potion {
+/* 整个状态栏不拦截鼠标，只有按钮和背包面板可以点。 */
+.hud-button {
   position: relative;
   overflow: hidden;
   border: 0;
-  outline: 1px solid rgba(255, 140, 140, 0.45);
+  outline: 1px solid rgba(255, 255, 255, 0.28);
   cursor: pointer;
   pointer-events: auto;
   touch-action: manipulation;
+}
+
+.hud-button:hover {
+  background: rgba(70, 70, 70, 0.6);
+}
+
+.hud-potion {
+  outline-color: rgba(255, 140, 140, 0.45);
 }
 
 .hud-potion:hover {
@@ -238,29 +313,24 @@ body {
   color: rgba(255, 255, 255, 0.45);
 }
 
-.hud-potion.empty .hud-potion-icon {
+.hud-potion.empty .item-icon {
   opacity: 0.35;
 }
 
-/* 一个小药瓶：圆肚子加上一截瓶颈。 */
-.hud-potion-icon {
-  position: relative;
-  width: 12px;
-  height: 12px;
-  margin-top: 4px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ffc4c4, #e03a3a 55%, #8a1414);
+.hud-bag.open {
+  background: rgba(90, 90, 90, 0.6);
 }
 
-.hud-potion-icon::before {
-  content: '';
-  position: absolute;
-  top: -5px;
-  left: 4px;
-  width: 4px;
-  height: 6px;
-  border-radius: 1px;
-  background: #d9c9a8;
+/* 背包里有武器、手里却空着：按钮的边框亮起来。 */
+.hud-bag.notice {
+  outline: 2px solid #9fd8ff;
+  animation: bag-notice 1.2s ease-in-out infinite;
+}
+
+@keyframes bag-notice {
+  50% {
+    outline-color: rgba(159, 216, 255, 0.25);
+  }
 }
 
 .hud-potion-count {
@@ -285,6 +355,204 @@ body {
   height: 0;
   background: rgba(0, 0, 0, 0.6);
   pointer-events: none;
+}
+
+/* ---- 背包面板 ---- */
+
+.bag {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 220px;
+  max-width: 60vw;
+  padding-top: 2px;
+  pointer-events: auto;
+}
+
+.bag[hidden] {
+  display: none;
+}
+
+.bag-title {
+  margin-top: 2px;
+  color: rgba(232, 240, 228, 0.6);
+  font-size: 11px;
+}
+
+.bag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bag-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  outline: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+button.bag-row {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+button.bag-row:hover:not(:disabled) {
+  outline-color: rgba(255, 255, 255, 0.5);
+  background: rgba(70, 70, 70, 0.6);
+}
+
+.bag-row.gold .bag-name,
+.bag-row.gold .bag-count {
+  color: #ffd95a;
+}
+
+.bag-row.sword .bag-name,
+.bag-row.weapon-slot .bag-name {
+  color: #bfe6ff;
+}
+
+.bag-row.weapon-slot {
+  outline-color: rgba(159, 216, 255, 0.55);
+}
+
+.bag-row.weapon-slot.empty {
+  outline-style: dashed;
+  outline-color: rgba(255, 255, 255, 0.2);
+  cursor: default;
+}
+
+.bag-row.weapon-slot.empty .bag-name {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.bag-count {
+  font-weight: 600;
+}
+
+.bag-note {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+}
+
+/* 右边的“装备”“卸下”“使用”。 */
+.bag-action {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.bag-attack {
+  color: #e8f0e4;
+  font-size: 12px;
+}
+
+.bag-empty {
+  padding: 4px 2px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+}
+
+/* ---- 商店面板（每一行沿用背包的样式） ---- */
+
+.shop {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 260px;
+  max-width: 70vw;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  pointer-events: auto;
+}
+
+/* 行本身是 flex，会盖掉 hidden 默认的隐藏，这里补上。 */
+.shop[hidden],
+.shop [hidden] {
+  display: none;
+}
+
+.shop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.shop-title {
+  color: #e9c8ff;
+  font-weight: 600;
+}
+
+.shop-close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+  font: inherit;
+  font-size: 15px;
+  line-height: 22px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.shop-close:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.shop-price {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: #ffd95a;
+  font-weight: 600;
+}
+
+/* 价格已经靠右了，后面的“买”“卖”紧跟着它。 */
+.shop-row .bag-action {
+  margin-left: 0;
+}
+
+/* 买不起、放不下：整行变暗，右边写着原因。 */
+.shop-row:disabled {
+  cursor: default;
+  outline-color: rgba(255, 255, 255, 0.08);
+}
+
+.shop-row:disabled .item-icon,
+.shop-row:disabled .bag-name,
+.shop-row:disabled .bag-note,
+.shop-row:disabled .shop-price {
+  opacity: 0.45;
+}
+
+.shop-row:disabled .bag-action {
+  background: none;
+  color: #ff9a8a;
+}
+
+.shop-hint {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
 }
 
 #banner {

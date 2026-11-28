@@ -5,3 +5,4 @@ export * from './map';
 export * from './movement';
 export * from './pathfinding';
 export * from './protocol';
+export * from './shop';

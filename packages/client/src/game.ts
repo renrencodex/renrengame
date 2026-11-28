@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import {
+  AOI_CELL_SIZE,
+  CLIENT_SHOP_RANGE,
   generateMap,
   INTERP_DELAY_MS,
   ITEM_IDS,
   ITEMS,
+  MERCHANT_NAME,
+  merchantPosition,
   Pathfinder,
   PLAYER_MAX_HP,
   PLAYER_RESPAWN_MS,
@@ -12,7 +16,16 @@ import {
   STATE_DEAD,
   STATE_MOVING,
 } from '@mmo/shared';
-import type { CharacterKind, DropInfo, EntityInfo, EntityState, Inventory, ServerMsg } from '@mmo/shared';
+import type {
+  CharacterKind,
+  DropInfo,
+  EntityInfo,
+  EntityState,
+  Inventory,
+  ItemId,
+  Point,
+  ServerMsg,
+} from '@mmo/shared';
 import { CameraRig } from './camera';
 import { DropView } from './drops';
 import type { ItemAssets } from './drops';
@@ -47,6 +60,14 @@ const MIN_PICK_RADIUS = 22;
 const USE_RETRY_MS = 500;
 /** 同时捡到几样东西时，每一行提示文字之间的间隔。 */
 const LOOT_TEXT_GAP = 0.4;
+/** 点选时代表商人的 id。服务器下发的实体 id 都是正数，不会撞上。 */
+const MERCHANT_PICK_ID = -1;
+/** 点了商人之后，走到离他这么远的地方站住。 */
+const MERCHANT_STAND_DISTANCE = 1.6;
+/** 商店打开之后，走到比打开的距离再远这么多才关上，免得站在边上时开开关关。 */
+const SHOP_CLOSE_MARGIN = 0.6;
+/** 离商人超过这么远就不画他了。和服务器的视野差不多大，画面里本来也看不到那么远。 */
+const MERCHANT_VISIBLE_DISTANCE = AOI_CELL_SIZE * 1.5;
 
 /** 客户端主体：把网络消息变成场景里的角色，并驱动每一帧的更新和渲染。 */
 export class Game {
@@ -65,6 +86,11 @@ export class Game {
   private readonly drops = new Map<number, DropView>();
   private readonly sample: Sample = { x: 0, z: 0, moving: false };
   private readonly projected = new THREE.Vector3();
+  /** 安全区里的商人。他不会动，位置由地图大小决定，所以不是服务器下发的实体。 */
+  private readonly merchant: EntityView;
+  private readonly merchantAt: Point;
+  /** 点了商人、正在朝他走过去；走到跟前就打开商店。中途点了别的就作罢。 */
+  private headingToShop = false;
   private selfView: EntityView | null = null;
   private selfDead = false;
   private selfHp = PLAYER_MAX_HP;
@@ -72,6 +98,8 @@ export class Game {
   private respawnAt = 0;
   /** 服务器最近一次发来的背包。还没收到过时为 null。 */
   private inventory: Inventory | null = null;
+  /** 服务器最近一次说的、自己手里的武器。 */
+  private weapon: ItemId | null = null;
   /** 这个时间之前不发喝药水的请求。服务器有自己的冷却判定，这里只是不发注定失败的请求。 */
   private potionReadyAt: number;
   private lastFrameAt = performance.now();
@@ -93,6 +121,18 @@ export class Game {
     this.world = new WorldScene(map);
     this.world.scene.add(this.marker.mesh, this.ring.mesh);
     this.floating = new FloatingTexts(this.world.scene);
+
+    this.merchantAt = merchantPosition(map.size);
+    this.merchant = new EntityView(
+      { id: MERCHANT_PICK_ID, kind: 'npc', name: MERCHANT_NAME, hp: 1, maxHp: 1 },
+      false,
+      assets,
+      itemAssets,
+    );
+    this.merchant.place(this.merchantAt.x, this.merchantAt.z);
+    // 平时面朝出生点的中心，有人来买东西时转向客人。
+    this.merchant.turnTo(map.size / 2, map.size / 2);
+    this.world.scene.add(this.merchant.root);
 
     // WebGL 不可用时这里会抛出异常，由调用方提示用户。
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -120,6 +160,20 @@ export class Game {
     this.potionReadyAt = performance.now() + POTION_COOLDOWN_MS;
     this.hud.setPotionCooldown(this.potionReadyAt);
     this.hud.onUsePotion = () => this.usePotion();
+    // 换武器由服务器判定，这里只把请求发出去；结果会随背包和 weapon 消息回来。
+    this.hud.onEquip = (item) => {
+      if (!this.selfDead) this.net.send({ t: 'equip', item });
+    };
+    this.hud.onUnequip = () => {
+      if (!this.selfDead) this.net.send({ t: 'unequip' });
+    };
+    // 买卖也一样：服务器按它算的位置、金币和背包判定，成了就发来新的背包。
+    this.hud.onBuy = (item, count) => {
+      if (!this.selfDead) this.net.send({ t: 'buy', item, count });
+    };
+    this.hud.onSell = (item, count) => {
+      if (!this.selfDead) this.net.send({ t: 'sell', item, count });
+    };
 
     window.addEventListener('resize', this.resize);
     window.addEventListener('keydown', this.onKeyDown);
@@ -170,7 +224,10 @@ export class Game {
         this.onHeal(msg.id, msg.amount);
         break;
       case 'inv':
-        this.onInventory(msg.items);
+        this.onInventory(msg.items, msg.weapon);
+        break;
+      case 'weapon':
+        this.viewOf(msg.id)?.setWeapon(msg.item);
         break;
       case 'welcome':
       case 'pong':
@@ -184,6 +241,11 @@ export class Game {
     window.removeEventListener('keydown', this.onKeyDown);
     this.input.enabled = false;
     this.hud.onUsePotion = null;
+    this.hud.onEquip = null;
+    this.hud.onUnequip = null;
+    this.hud.onBuy = null;
+    this.hud.onSell = null;
+    this.hud.closeShop();
     this.hud.setBanner(null);
   }
 
@@ -196,9 +258,10 @@ export class Game {
       // 进入世界，或者死亡后在出生点复活（服务端按“离开再进入”处理）。
       this.local.place(info.x, info.z);
       if (!this.selfView) {
-        this.selfView = new EntityView(info, true, this.assets);
+        this.selfView = new EntityView(info, true, this.assets, this.itemAssets);
         this.world.scene.add(this.selfView.root);
       }
+      this.selfView.setWeapon(info.weapon ?? null);
       this.selfView.place(info.x, info.z);
       this.rig.snapTo(info.x, info.z);
       this.hud.show();
@@ -209,7 +272,7 @@ export class Game {
     let remote = this.remotes.get(info.id);
     if (!remote) {
       remote = {
-        view: new EntityView(info, false, this.assets),
+        view: new EntityView(info, false, this.assets, this.itemAssets),
         buffer: new SnapshotBuffer(),
         kind: info.kind,
         dead: false,
@@ -223,6 +286,7 @@ export class Game {
     remote.z = info.z;
     remote.view.place(info.x, info.z);
     remote.view.setHp(info.hp);
+    remote.view.setWeapon(info.weapon ?? null);
     // 进入视野时已经死了的，直接显示倒地的样子，不再播一遍倒下的过程。
     this.setRemoteDead(remote, info.state === STATE_DEAD, true);
     // 先放一个初始状态，之后的快照会接着它插值。
@@ -251,6 +315,8 @@ export class Game {
         // 倒在服务器说的位置，放下手头的一切。
         this.local.place(x, z);
         this.clearTarget(false);
+        this.headingToShop = false;
+        this.hud.closeShop();
         this.respawnAt = performance.now() + PLAYER_RESPAWN_MS;
       } else {
         this.hud.setBanner(null);
@@ -284,13 +350,15 @@ export class Game {
   }
 
   /**
-   * 服务器发来的背包。和上一次比，多出来的就是刚捡到的，在自己头上提示一下；
+   * 服务器发来的背包和手里的武器。和上一次比，多出来的就是刚捡到的，在自己头上提示一下；
    * 药水少了说明刚喝了一瓶，开始冷却。
    */
-  private onInventory(items: Inventory): void {
+  private onInventory(items: Inventory, weapon: ItemId | null): void {
     const before = this.inventory;
+    const weaponBefore = this.weapon;
     this.inventory = items;
-    this.hud.setInventory(items.gold ?? 0, items.potion ?? 0);
+    this.weapon = weapon;
+    this.hud.setInventory(items, weapon);
     // 第一次是进入世界时的背包，不算捡到。
     if (!before) return;
 
@@ -302,7 +370,9 @@ export class Game {
     const { x, z } = this.selfView.root.position;
     let line = 0;
     for (const id of ITEM_IDS) {
-      const gained = (items[id] ?? 0) - (before[id] ?? 0);
+      // 手里的那一件也算进去，这样把武器拿起来、收回去不会被当成丢了或者捡到一件。
+      const total = (items[id] ?? 0) + (weapon === id ? 1 : 0);
+      const gained = total - (before[id] ?? 0) - (weaponBefore === id ? 1 : 0);
       if (gained <= 0) continue;
       // 从名字和血条的上方冒出来，不和它们叠在一起。
       const y = this.selfView.height + 0.9 + line++ * LOOT_TEXT_GAP;
@@ -325,6 +395,11 @@ export class Game {
     const target = ev.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
     if (ev.key === '1') this.usePotion();
+    else if (ev.key === 'b' || ev.key === 'B') this.hud.toggleBag();
+    else if (ev.key === 'Escape') {
+      this.headingToShop = false;
+      this.hud.closeShop();
+    }
   };
 
   private viewOf(id: number): EntityView | null {
@@ -335,8 +410,9 @@ export class Game {
 
   private onMoveInput(x: number, z: number): void {
     if (!this.selfView || this.selfDead) return;
-    // 点地面就是放弃当前的目标。
+    // 点地面就是放弃当前的目标，也不再去找商人。
     this.clearTarget(true);
+    this.headingToShop = false;
     // 先在本地验证并开始走，再告诉服务器。服务器会用同样的规则重新算一遍。
     if (!this.local.requestMove(x, z)) return;
     this.net.send({ t: 'moveTo', x, z });
@@ -375,9 +451,15 @@ export class Game {
       add(id, pos.x, pos.z, remote.view.height);
     }
     for (const [id, drop] of this.drops) add(id, drop.x, drop.z, drop.height);
+    if (this.merchant.root.visible) add(MERCHANT_PICK_ID, this.merchantAt.x, this.merchantAt.z, this.merchant.height);
 
     const id = pickEntity(candidates, px, py);
     if (id === 0) return false;
+    if (id === MERCHANT_PICK_ID) {
+      this.visitMerchant();
+      return true;
+    }
+    this.headingToShop = false;
     const drop = this.drops.get(id);
     if (drop) {
       // 点地上的物品就是走到它那里，走到跟前服务器会自动让角色捡起来。
@@ -389,6 +471,48 @@ export class Game {
       this.net.send({ t: 'target', id });
     }
     return true;
+  }
+
+  /**
+   * 点了商人：已经在他跟前就直接打开商店，否则先走过去。
+   * 走过去用的是普通的 moveTo，服务器不知道“去找商人”这回事，它只在买卖时检查离商人够不够近。
+   */
+  private visitMerchant(): void {
+    this.clearTarget(true);
+    const m = this.merchantAt;
+    const dx = this.local.x - m.x;
+    const dz = this.local.z - m.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance <= CLIENT_SHOP_RANGE) {
+      this.headingToShop = false;
+      this.hud.openShop();
+      return;
+    }
+    // 停在商人朝自己这一侧的面前，不站到他身上去。
+    const x = m.x + (dx / distance) * MERCHANT_STAND_DISTANCE;
+    const z = m.z + (dz / distance) * MERCHANT_STAND_DISTANCE;
+    if (!this.local.requestMove(x, z)) return;
+    this.net.send({ t: 'moveTo', x, z });
+    this.headingToShop = true;
+  }
+
+  /** 每帧调用：走到商人跟前时打开商店，走远了关上；远得看不见时不画他。 */
+  private updateMerchant(dt: number): void {
+    const m = this.merchantAt;
+    const distance = Math.hypot(this.local.x - m.x, this.local.z - m.z);
+    this.merchant.root.visible = distance <= MERCHANT_VISIBLE_DISTANCE;
+    if (!this.merchant.root.visible) return;
+    if (!this.selfDead) {
+      if (this.headingToShop && distance <= CLIENT_SHOP_RANGE) {
+        this.headingToShop = false;
+        this.hud.openShop();
+      }
+      if (this.hud.shopOpen) {
+        if (distance > CLIENT_SHOP_RANGE + SHOP_CLOSE_MARGIN) this.hud.closeShop();
+        else this.merchant.turnTo(this.local.x, this.local.z);
+      }
+    }
+    this.merchant.update(dt);
   }
 
   /** 放弃当前的目标。notify 为 false 时不通知服务器（服务器自己已经清掉了，比如玩家死亡）。 */
@@ -456,6 +580,7 @@ export class Game {
       remote.view.update(dt);
     }
     for (const drop of this.drops.values()) drop.update(dt);
+    this.updateMerchant(dt);
 
     this.marker.update(dt);
     this.ring.update(dt);

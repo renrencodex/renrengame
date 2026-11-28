@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import type { EntityKind } from '@mmo/shared';
+import type { CharacterKind, ItemId } from '@mmo/shared';
+import { createHeldWeapon } from './drops';
+import type { ItemAssets } from './drops';
 
 /** 一个人物模型：骨骼、网格和它自带的动作。同一个模型的所有角色共用几何体和动作数据。 */
 export interface CharacterModel {
@@ -21,7 +23,8 @@ export interface CharacterAssets {
 /** 创建一个角色的显示对象需要的信息。 */
 export interface EntityViewInfo {
   id: number;
-  kind: EntityKind;
+  /** npc 是不会动、不能打的角色（商人）。它不是服务器下发的实体，只在客户端有。 */
+  kind: CharacterKind | 'npc';
   name: string;
   hp: number;
   maxHp: number;
@@ -40,7 +43,21 @@ const FLASH_COLOR = new THREE.Color(0xff3020);
 const CLIP_IDLE = 'Idle_Loop';
 const CLIP_RUN = 'Jog_Fwd_Loop';
 const CLIP_PUNCHES = ['Punch_Jab', 'Punch_Cross'];
+const CLIP_SWING = 'Sword_Attack';
+/** 握着剑的戒备姿势。挥剑的动作从它开始、到它结束。 */
+const CLIP_GUARD = 'Sword_Idle';
 const CLIP_DEATH = 'Death01';
+/** 模型里右手上挂武器的节点，见 tools/models/build.mjs。 */
+const WEAPON_NODE = 'Weapon_R';
+/**
+ * 挥剑动作原本一次要一秒半，比两次攻击的间隔（0.8 秒）长得多。
+ * 这里加快播放，并且跳过开头一小段抬手的过程：剑在收到命中消息后大约 0.2 秒砍到，
+ * 下一次攻击到来时人已经差不多回到戒备姿势，可以接着挥下一剑。
+ */
+const SWING_RATE = 1.45;
+const SWING_START = 0.12;
+/** 拿着武器打完一下之后，保持戒备姿势这么久，没有再打就放松下来。 */
+const GUARD_SECONDS = 2.5;
 /** 跑步动作的播放速度：玩家跑得快，怪物慢一些，脚步和移动速度大致对得上。 */
 const PLAYER_RUN_RATE = 1.2;
 const MONSTER_RUN_RATE = 0.85;
@@ -78,6 +95,15 @@ const MONSTER_LOOK: Look = {
   plainSkin: true,
   eyeGlow: 0xff2010,
   runRate: MONSTER_RUN_RATE,
+};
+
+/** 商人：紫色的长衣、花白的头发，比玩家高一点。玩家的上衣颜色是随机的，但不会有花白的头发。 */
+const MERCHANT_LOOK: Look = {
+  model: 'male',
+  size: 1.08,
+  colors: { Skin: 0xeccfb8, Shirt: 0x7a4fb0, Pants: 0x4a3a78, Boots: 0x2a1c12, Hair: 0xd8d4cc },
+  fallbackColor: 0x7a4fb0,
+  runRate: 1,
 };
 
 /** 玩家的外观由名字决定：同一个人每次上线、在每个人眼里都是同一个样子。 */
@@ -155,8 +181,18 @@ export class EntityView {
   private run: THREE.AnimationAction | null = null;
   /** 出拳的几个动作轮流用。 */
   private punches: THREE.AnimationAction[] = [];
+  /** 挥剑只有一个动作，这里放的是它的两份，轮流播放，这样连续挥剑时前一下能渐变到后一下。 */
+  private swings: THREE.AnimationAction[] = [];
+  private guard: THREE.AnimationAction | null = null;
+  /** 还要保持戒备姿势多久。只在拿着武器时有意义。 */
+  private guardLeft = 0;
   private punchCount = 0;
+  /** 正在播放（或者最近一次播放）的攻击动作，出拳或者挥剑。 */
   private punch: THREE.AnimationAction | null = null;
+  /** 右手上挂武器的节点。没有模型、用胶囊体代替时没有。 */
+  private weaponSocket: THREE.Object3D | null = null;
+  private weapon: ItemId | null = null;
+  private weaponObject: THREE.Object3D | null = null;
   private death: THREE.AnimationAction | null = null;
   private current: THREE.AnimationAction | null = null;
   private moving = false;
@@ -166,9 +202,15 @@ export class EntityView {
   private yaw = 0;
   private targetYaw = 0;
 
-  constructor(info: EntityViewInfo, isSelf: boolean, assets: CharacterAssets | null) {
+  constructor(
+    info: EntityViewInfo,
+    isSelf: boolean,
+    assets: CharacterAssets | null,
+    private readonly itemAssets: ItemAssets,
+  ) {
     const isMonster = info.kind === 'monster';
-    const look = isMonster ? MONSTER_LOOK : playerLook(info.name);
+    const isNpc = info.kind === 'npc';
+    const look = isMonster ? MONSTER_LOOK : isNpc ? MERCHANT_LOOK : playerLook(info.name);
     const source = assets?.[look.model];
     this.height = (source?.height ?? FALLBACK_HEIGHT) * look.size;
     this.maxHp = info.maxHp;
@@ -196,6 +238,7 @@ export class EntityView {
         mesh.material = copy;
       });
       this.root.add(model);
+      this.weaponSocket = model.getObjectByName(WEAPON_NODE) ?? null;
 
       const mixer = new THREE.AnimationMixer(model);
       this.mixer = mixer;
@@ -207,8 +250,15 @@ export class EntityView {
       this.run = clip(CLIP_RUN);
       this.run?.setEffectiveTimeScale(look.runRate);
       this.punches = CLIP_PUNCHES.map(clip).filter((action) => action !== null);
+      const swing = THREE.AnimationClip.findByName(source.animations, CLIP_SWING);
+      if (swing) {
+        // 同一个动作在一个角色身上只能有一个播放实例，所以第二份用拷贝。
+        this.swings = [mixer.clipAction(swing), mixer.clipAction(swing.clone())];
+        for (const action of this.swings) action.setEffectiveTimeScale(SWING_RATE);
+      }
+      this.guard = clip(CLIP_GUARD);
       this.death = clip(CLIP_DEATH);
-      for (const once of [...this.punches, this.death]) once?.setLoop(THREE.LoopOnce, 1);
+      for (const once of [...this.punches, ...this.swings, this.death]) once?.setLoop(THREE.LoopOnce, 1);
       if (this.death) this.death.clampWhenFinished = true;
       mixer.addEventListener('finished', (ev) => {
         if (ev.action !== this.punch) return;
@@ -233,7 +283,7 @@ export class EntityView {
     }
 
     const element = document.createElement('div');
-    element.className = `name-label ${isMonster ? 'monster' : isSelf ? 'self' : 'player'}`;
+    element.className = `name-label ${isMonster ? 'monster' : isNpc ? 'npc' : isSelf ? 'self' : 'player'}`;
     const nameText = document.createElement('div');
     nameText.className = 'name-text';
     nameText.textContent = info.name;
@@ -269,6 +319,13 @@ export class EntityView {
     this.refreshAction();
   }
 
+  /** 转过去面朝 (x, z)，位置不变。给站着不动的角色用。 */
+  turnTo(x: number, z: number): void {
+    const dx = x - this.root.position.x;
+    const dz = z - this.root.position.z;
+    if (dx * dx + dz * dz > 1e-6) this.targetYaw = Math.atan2(dx, dz);
+  }
+
   setHp(hp: number): void {
     const ratio = this.maxHp > 0 ? Math.min(1, Math.max(0, hp / this.maxHp)) : 0;
     this.hpFill.style.width = `${Math.round(ratio * 100)}%`;
@@ -291,17 +348,39 @@ export class EntityView {
     if (dead && instant && this.death) this.death.time = this.death.getClip().duration;
   }
 
-  /** 朝 (x, z) 出拳一次。 */
+  /** 换手里的武器，null 是空手。武器挂在右手上，跟着手动；之后的攻击动作从出拳换成挥剑。 */
+  setWeapon(item: ItemId | null): void {
+    if (item === this.weapon) return;
+    this.weapon = item;
+    this.weaponObject?.removeFromParent();
+    this.weaponObject = null;
+    if (item && this.weaponSocket) {
+      this.weaponObject = createHeldWeapon(item, this.itemAssets);
+      this.weaponSocket.add(this.weaponObject);
+    }
+    // 打到一半换武器：不把出拳的动作接着当挥剑播完，直接回到站立。
+    this.punching = false;
+    this.guardLeft = 0;
+    this.refreshAction();
+  }
+
+  /** 朝 (x, z) 攻击一次：空手出拳，拿着武器就挥过去。 */
   attack(x: number, z: number): void {
     if (this.dead) return;
     const dx = x - this.root.position.x;
     const dz = z - this.root.position.z;
     if (dx * dx + dz * dz > 1e-6) this.targetYaw = Math.atan2(dx, dz);
-    if (this.punches.length === 0 || this.moving) return;
+    const armed = this.weapon !== null && this.swings.length > 0;
+    const moves = armed ? this.swings : this.punches;
+    if (moves.length === 0 || this.moving) return;
     this.punching = true;
-    this.punch = this.punches[this.punchCount++ % this.punches.length];
+    this.punch = moves[this.punchCount++ % moves.length];
     if (this.current === this.punch) this.punch.reset().play();
     else this.refreshAction();
+    if (armed) {
+      this.punch.time = SWING_START;
+      this.guardLeft = GUARD_SECONDS;
+    }
   }
 
   /** 被打中时闪一下。 */
@@ -321,6 +400,10 @@ export class EntityView {
       const strength = this.flashLeft / FLASH_SECONDS;
       for (const { material, emissive } of this.ownedMaterials) material.emissive.copy(emissive).lerp(FLASH_COLOR, strength);
     }
+    if (this.guardLeft > 0) {
+      this.guardLeft -= dt;
+      if (this.guardLeft <= 0) this.refreshAction();
+    }
     this.mixer?.update(dt);
   }
 
@@ -336,7 +419,9 @@ export class EntityView {
 
   /** 按当前状态选出应该播放的动作，和正在播放的不同时渐变过去。 */
   private refreshAction(): void {
-    const next = this.dead ? this.death : this.punching ? this.punch : this.moving ? this.run : this.idle;
+    // 拿着武器刚打完的一小段时间里，站着时用戒备姿势代替普通的站立。
+    const standing = this.weapon && this.guardLeft > 0 && this.guard ? this.guard : this.idle;
+    const next = this.dead ? this.death : this.punching ? this.punch : this.moving ? this.run : standing;
     if (next === this.current) return;
     this.current?.fadeOut(FADE_SECONDS);
     next?.reset().fadeIn(FADE_SECONDS).play();

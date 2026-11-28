@@ -1,6 +1,8 @@
 import {
   AOI_CELL_SIZE,
   ATTACK_RANGE,
+  attackDamage,
+  buyProblem,
   DROP_LIFETIME_MS,
   DROP_PICKUP_DELAY_MS,
   DROP_SCATTER_RADIUS,
@@ -15,9 +17,9 @@ import {
   MOVE_MIN_INTERVAL_MS,
   MOVE_SPEED,
   mulberry32,
+  nearMerchant,
   Pathfinder,
   PICKUP_RADIUS,
-  PLAYER_ATTACK_DAMAGE,
   PLAYER_ATTACK_INTERVAL_MS,
   PLAYER_MAX_HP,
   PLAYER_RESPAWN_MS,
@@ -29,6 +31,8 @@ import {
   SAFE_ZONE_RADIUS,
   sanitizeInventory,
   sanitizeName,
+  sanitizeWeapon,
+  sellProblem,
   setPath,
   SNAPSHOT_EVERY_TICKS,
   SPAWN_RADIUS,
@@ -36,9 +40,11 @@ import {
   STATE_IDLE,
   STATE_MOVING,
   stepMover,
+  SWORD_DROP_CHANCE,
   TICK_RATE,
 } from '@mmo/shared';
 import type {
+  CharacterInfo,
   EntityInfo,
   EntityState,
   GameMap,
@@ -70,6 +76,9 @@ export interface WorldStats {
   dropped: number;
   /** 累计被捡起的物品堆数。 */
   pickedUp: number;
+  /** 累计从商人那里买的、卖给商人的物品个数。 */
+  bought: number;
+  sold: number;
 }
 
 export interface PlayerState {
@@ -81,6 +90,8 @@ export interface PlayerState {
   dead: boolean;
   /** 背包内容的一份拷贝。 */
   items: Inventory;
+  /** 手里拿的武器，空手是 null。 */
+  weapon: ItemId | null;
 }
 
 export interface MonsterState {
@@ -105,7 +116,8 @@ const DROP_CELL_SIZE = Math.max(2, PICKUP_RADIUS);
 const DROP_SCATTER_MIN = 0.5;
 
 /**
- * 权威的游戏世界：所有位置、血量和物品都由这里计算，客户端只能提交“想去哪”“想打谁”“想用什么”。
+ * 权威的游戏世界：所有位置、血量、物品和金币都由这里计算，
+ * 客户端只能提交“想去哪”“想打谁”“想用什么”“想拿哪件武器”“想买卖什么”。
  */
 export class World {
   readonly map: GameMap;
@@ -116,6 +128,8 @@ export class World {
     hits: 0,
     dropped: 0,
     pickedUp: 0,
+    bought: 0,
+    sold: 0,
   };
   private readonly pathfinder: Pathfinder;
   /** 怪物用的寻路器：安全区里的格子在它眼里也是障碍。 */
@@ -188,7 +202,16 @@ export class World {
   getPlayer(id: number): PlayerState | undefined {
     const p = this.players.get(id);
     return p
-      ? { name: p.name, x: p.x, z: p.z, moving: p.moving, hp: p.hp, dead: p.dead, items: { ...p.inventory } }
+      ? {
+          name: p.name,
+          x: p.x,
+          z: p.z,
+          moving: p.moving,
+          hp: p.hp,
+          dead: p.dead,
+          items: { ...p.inventory },
+          weapon: p.weapon,
+        }
       : undefined;
   }
 
@@ -206,10 +229,18 @@ export class World {
   }
 
   /**
-   * 玩家进入世界。spawn、hp、items 是存档里的位置、血量和背包；
-   * 不传时在出生点附近随机一个位置、满血、空背包。
+   * 玩家进入世界。spawn、hp、items、weapon 是存档里的位置、血量、背包和手里的武器；
+   * 不传时在出生点附近随机一个位置、满血、空背包、空手。
    */
-  join(name: string, conn: Connection, now: number, spawn?: Point, hp?: number, items?: Inventory): number {
+  join(
+    name: string,
+    conn: Connection,
+    now: number,
+    spawn?: Point,
+    hp?: number,
+    items?: Inventory,
+    weapon?: ItemId | null,
+  ): number {
     const id = this.nextId++;
     const pos = spawn ?? this.randomSpawn();
     const player: Player = {
@@ -235,6 +266,7 @@ export class World {
       lastCombatAt: now,
       nextRegenAt: 0,
       inventory: sanitizeInventory(items),
+      weapon: sanitizeWeapon(weapon),
       // 药水也一样，刚上线先走一轮冷却，不能靠重新登录连着喝。
       nextPotionAt: now + POTION_COOLDOWN_MS,
     };
@@ -306,6 +338,66 @@ export class World {
     this.sendInventory(p);
     this.broadcastNear(p.id, { t: 'heal', id: p.id, amount });
     return true;
+  }
+
+  /**
+   * 玩家把背包里的一件武器拿在手里，返回是否换成了。
+   * 手里原来有别的武器时，换下来的那件放回背包；背包里那种武器已经放满时换不了。
+   */
+  equip(id: number, item: ItemId): boolean {
+    const p = this.players.get(id);
+    if (!p || p.dead || !ITEMS[item].weapon) return false;
+    if ((p.inventory[item] ?? 0) < 1) return false;
+    const old = p.weapon;
+    if (old === item) return false;
+    if (old && (p.inventory[old] ?? 0) >= ITEMS[old].maxCount) return false;
+    addItem(p.inventory, item, -1);
+    if (old) addItem(p.inventory, old, 1);
+    this.setWeapon(p, item);
+    return true;
+  }
+
+  /** 玩家把手里的武器收回背包，返回是否收起来了。背包里这种武器已经放满时收不回去。 */
+  unequip(id: number): boolean {
+    const p = this.players.get(id);
+    if (!p || p.dead || !p.weapon) return false;
+    if ((p.inventory[p.weapon] ?? 0) >= ITEMS[p.weapon].maxCount) return false;
+    addItem(p.inventory, p.weapon, 1);
+    this.setWeapon(p, null);
+    return true;
+  }
+
+  /**
+   * 玩家向商人买 count 个 item，返回是否买成了。
+   * 要活着、站在商人旁边、金币够、背包放得下；要么全买成，要么一个都不买。
+   */
+  buy(id: number, item: ItemId, count: number): boolean {
+    const p = this.players.get(id);
+    if (!p || !this.canTrade(p) || buyProblem(p.inventory, item, count) !== null) return false;
+    addItem(p.inventory, 'gold', -(ITEMS[item].buyPrice as number) * count);
+    addItem(p.inventory, item, count);
+    this.stats.bought += count;
+    this.sendInventory(p);
+    return true;
+  }
+
+  /** 玩家把背包里的 count 个 item 卖给商人，返回是否卖成了。拿在手里的武器不在背包里，要先收起来才能卖。 */
+  sell(id: number, item: ItemId, count: number): boolean {
+    const p = this.players.get(id);
+    if (!p || !this.canTrade(p) || sellProblem(p.inventory, item, count) !== null) return false;
+    addItem(p.inventory, item, -count);
+    addItem(p.inventory, 'gold', (ITEMS[item].sellPrice as number) * count);
+    this.stats.sold += count;
+    this.sendInventory(p);
+    return true;
+  }
+
+  /**
+   * 活着、离商人够近才能买卖。用的是服务器算出来的位置，客户端说自己在哪不算数。
+   * 现在商人周围都是安全区，没有人会倒在那里；判断死活是为了以后挪动商人或者改了安全区也不出错。
+   */
+  private canTrade(p: Player): boolean {
+    return !p.dead && nearMerchant(this.map.size, p.x, p.z);
   }
 
   /**
@@ -464,7 +556,7 @@ export class World {
     if (Math.hypot(m.x - p.x, m.z - p.z) > ATTACK_RANGE) return;
     if (!this.pathfinder.lineOfSight(p.x, p.z, m.x, m.z)) return;
     p.nextAttackAt = now + PLAYER_ATTACK_INTERVAL_MS;
-    this.dealDamage(p, m, PLAYER_ATTACK_DAMAGE, now);
+    this.dealDamage(p, m, attackDamage(p.weapon), now);
   }
 
   private dealDamage(attacker: Character, target: Character, amount: number, now: number): void {
@@ -511,13 +603,14 @@ export class World {
 
   // ---- 掉落和拾取 ----
 
-  /** 怪物死后掉东西：金币必掉，药水看运气。掉落谁都能捡，先到先得。 */
+  /** 怪物死后掉东西：金币必掉，药水和剑看运气。掉落谁都能捡，先到先得。 */
   private dropLoot(m: Monster, now: number): void {
     const gold = GOLD_DROP_MIN + Math.floor(this.lootRandom() * (GOLD_DROP_MAX - GOLD_DROP_MIN + 1));
-    // 两样东西落在尸体的两侧，不会叠在一起。
+    // 几样东西落在尸体周围不同的方向上，不会叠在一起。
     const angle = this.lootRandom() * Math.PI * 2;
     this.scatterDrop('gold', gold, m, angle, now);
     if (this.lootRandom() < POTION_DROP_CHANCE) this.scatterDrop('potion', 1, m, angle + Math.PI, now);
+    if (this.lootRandom() < SWORD_DROP_CHANCE) this.scatterDrop('sword', 1, m, angle + Math.PI / 2, now);
   }
 
   /** 把物品放在尸体旁边 angle 方向上。那里是墙或者被墙隔开时，就放在尸体的位置。 */
@@ -568,7 +661,14 @@ export class World {
   }
 
   private sendInventory(p: Player): void {
-    p.conn.send({ t: 'inv', items: { ...p.inventory } });
+    p.conn.send({ t: 'inv', items: { ...p.inventory }, weapon: p.weapon });
+  }
+
+  /** 换掉玩家手里的武器。背包已经由调用方改好；这里通知玩家自己和看得到他的人。 */
+  private setWeapon(p: Player, weapon: ItemId | null): void {
+    p.weapon = weapon;
+    this.sendInventory(p);
+    this.broadcastNear(p.id, { t: 'weapon', id: p.id, item: weapon });
   }
 
   // ---- 视野 ----
@@ -751,7 +851,7 @@ function addItem(inventory: Inventory, item: ItemId, delta: number): void {
 
 function info(e: Entity): EntityInfo {
   if (e.kind === 'drop') return { id: e.id, kind: 'drop', x: e.x, z: e.z, item: e.item, count: e.count };
-  return {
+  const out: CharacterInfo = {
     id: e.id,
     kind: e.kind,
     name: e.name,
@@ -761,6 +861,8 @@ function info(e: Entity): EntityInfo {
     hp: e.hp,
     maxHp: e.maxHp,
   };
+  if (e.kind === 'player' && e.weapon) out.weapon = e.weapon;
+  return out;
 }
 
 function round2(v: number): number {

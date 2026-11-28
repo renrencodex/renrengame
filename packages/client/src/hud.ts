@@ -1,4 +1,7 @@
-import { POTION_COOLDOWN_MS } from '@mmo/shared';
+import { ITEM_IDS, ITEMS, POTION_COOLDOWN_MS } from '@mmo/shared';
+import type { Inventory, ItemId } from '@mmo/shared';
+import { BagPanel, itemIcon } from './bag';
+import { ShopPanel } from './shop';
 
 export interface HudData {
   rtt: number;
@@ -14,12 +17,21 @@ export interface HudData {
 const UPDATE_MS = 500;
 
 /**
- * 左上角的状态信息（延迟、视野内数量、坐标、帧率）、自己的血条、金币和药水，以及屏幕中间的提示。
- * 药水是一个按钮，点它和按数字键 1 一样。
+ * 左上角的状态栏：自己的血条、金币、药水、背包，以及延迟、视野内数量、坐标、帧率；还有屏幕中间的提示。
+ * 药水是一个按钮，点它和按数字键 1 一样；背包按钮（或者 B 键）打开下面的背包面板。
+ * 商店面板也在这里，什么时候打开、关上由 Game 决定（走到商人跟前、走远了）。
  */
 export class Hud {
-  /** 玩家点了药水按钮。 */
+  /** 玩家想喝药水（点了药水按钮，或者在背包里点了药水）。 */
   onUsePotion: (() => void) | null = null;
+  /** 玩家在背包里点了一件武器，想把它拿在手里。 */
+  onEquip: ((item: ItemId) => void) | null = null;
+  /** 玩家点了武器栏，想把手里的武器收回背包。 */
+  onUnequip: (() => void) | null = null;
+  /** 玩家在商店里点了买、卖。 */
+  onBuy: ((item: ItemId, count: number) => void) | null = null;
+  onSell: ((item: ItemId, count: number) => void) | null = null;
+  private readonly shop = new ShopPanel();
   private readonly status = document.createElement('div');
   private readonly hpFill = document.createElement('div');
   private readonly hpText = document.createElement('span');
@@ -27,6 +39,8 @@ export class Hud {
   private readonly potionButton = document.createElement('button');
   private readonly potionCount = document.createElement('span');
   private readonly potionCooldown = document.createElement('div');
+  private readonly bagButton = document.createElement('button');
+  private readonly bag = new BagPanel();
   private frames = 0;
   private lastUpdate = 0;
   private bannerText = '';
@@ -50,32 +64,45 @@ export class Hud {
     items.className = 'hud-items';
     const goldBox = document.createElement('div');
     goldBox.className = 'hud-gold';
-    goldBox.title = '金币';
-    const goldIcon = document.createElement('span');
-    goldIcon.className = 'hud-gold-icon';
+    goldBox.title = ITEMS.gold.name;
     this.gold.className = 'hud-gold-count';
-    goldBox.append(goldIcon, this.gold);
+    goldBox.append(itemIcon('gold'), this.gold);
 
     this.potionButton.type = 'button';
-    this.potionButton.className = 'hud-potion';
+    this.potionButton.className = 'hud-button hud-potion';
     this.potionButton.title = '喝一瓶治疗药水（数字键 1）';
-    const potionIcon = document.createElement('span');
-    potionIcon.className = 'hud-potion-icon';
     this.potionCount.className = 'hud-potion-count';
-    const key = document.createElement('span');
-    key.className = 'hud-key';
-    key.textContent = '1';
     this.potionCooldown.className = 'hud-potion-cooldown';
-    this.potionButton.append(this.potionCooldown, potionIcon, this.potionCount, key);
+    this.potionButton.append(this.potionCooldown, itemIcon('potion'), this.potionCount, keyHint('1'));
     this.potionButton.addEventListener('click', () => {
       // 不留焦点，免得之后按空格、回车又触发一次。
       this.potionButton.blur();
       this.onUsePotion?.();
     });
-    items.append(goldBox, this.potionButton);
 
-    el.replaceChildren(bar, items, this.status);
-    this.setInventory(0, 0);
+    this.bagButton.type = 'button';
+    this.bagButton.className = 'hud-button hud-bag';
+    this.bagButton.title = '打开或关上背包（B 键）';
+    const bagLabel = document.createElement('span');
+    bagLabel.textContent = '背包';
+    this.bagButton.append(bagLabel, keyHint('B'));
+    this.bagButton.addEventListener('click', () => {
+      this.bagButton.blur();
+      this.toggleBag();
+    });
+    items.append(goldBox, this.potionButton, this.bagButton);
+
+    this.bag.onUse = (item) => {
+      if (item === 'potion') this.onUsePotion?.();
+    };
+    this.bag.onEquip = (item) => this.onEquip?.(item);
+    this.bag.onUnequip = () => this.onUnequip?.();
+    this.shop.onBuy = (item, count) => this.onBuy?.(item, count);
+    this.shop.onSell = (item, count) => this.onSell?.(item, count);
+    this.shop.onClose = () => this.closeShop();
+
+    el.replaceChildren(bar, items, this.bag.element, this.shop.element, this.status);
+    this.setInventory({}, null);
   }
 
   show(): void {
@@ -88,11 +115,35 @@ export class Hud {
     this.hpText.textContent = `${hp} / ${maxHp}`;
   }
 
-  setInventory(gold: number, potions: number): void {
-    this.gold.textContent = String(gold);
-    this.potions = potions;
-    this.potionCount.textContent = `×${potions}`;
-    this.potionButton.classList.toggle('empty', potions === 0);
+  /** 背包里的东西和手里的武器（空手是 null）。 */
+  setInventory(items: Inventory, weapon: ItemId | null): void {
+    this.gold.textContent = String(items.gold ?? 0);
+    this.potions = items.potion ?? 0;
+    this.potionCount.textContent = `×${this.potions}`;
+    this.potionButton.classList.toggle('empty', this.potions === 0);
+    this.bag.setInventory(items, weapon);
+    this.shop.setInventory(items);
+    // 背包里有武器、手里却空着的时候，让背包按钮亮起来提醒一下。
+    const idleWeapon = weapon === null && ITEM_IDS.some((id) => ITEMS[id].weapon && (items[id] ?? 0) > 0);
+    this.bagButton.classList.toggle('notice', idleWeapon && !this.bag.open);
+  }
+
+  toggleBag(): void {
+    this.bag.toggle();
+    this.bagButton.classList.toggle('open', this.bag.open);
+    if (this.bag.open) this.bagButton.classList.remove('notice');
+  }
+
+  get shopOpen(): boolean {
+    return this.shop.open;
+  }
+
+  openShop(): void {
+    this.shop.show();
+  }
+
+  closeShop(): void {
+    this.shop.hide();
   }
 
   /** 药水进入冷却，到 readyAt（本地时间）结束。 */
@@ -130,4 +181,12 @@ export class Hud {
       `延迟 ${Math.round(data.rtt)} ms · 视野内 ${data.players} 人 ${data.monsters} 怪 · ` +
       `坐标 (${data.x.toFixed(1)}, ${data.z.toFixed(1)}) · 纠正 ${data.corrections} 次 · ${fps} FPS`;
   }
+}
+
+/** 按钮上提示快捷键的小方块。 */
+function keyHint(key: string): HTMLElement {
+  const hint = document.createElement('span');
+  hint.className = 'hud-key';
+  hint.textContent = key;
+  return hint;
 }

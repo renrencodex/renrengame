@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import type { Inventory } from '@mmo/shared';
+import type { Inventory, ItemId } from '@mmo/shared';
 import { CharacterStore, spawnFromSave } from '../src/characters';
 import type { CharacterState, Queryable, SavedCharacter } from '../src/characters';
 
-/** 库里的一行。items 是 jsonb 解析之后的值，可能是任何形状。 */
+/** 库里的一行。items 是 jsonb 解析之后的值，可能是任何形状；weapon 是一段文字或者空。 */
 interface Row {
   x: number;
   z: number;
   hp: number | null;
   items: unknown;
+  weapon?: string | null;
 }
 
 /**
@@ -37,7 +38,17 @@ class FakeDb implements Queryable {
       // 和真实数据库一样：结果是语句执行那一刻的数据，之后才返回给调用方。
       const row = this.rows.get(params[0] as number);
       const result =
-        row === undefined ? [] : [{ x: row?.x ?? null, z: row?.z ?? null, hp: row?.hp ?? null, items: row?.items ?? {} }];
+        row === undefined
+          ? []
+          : [
+              {
+                x: row?.x ?? null,
+                z: row?.z ?? null,
+                hp: row?.hp ?? null,
+                items: row?.items ?? {},
+                weapon: row?.weapon ?? null,
+              },
+            ];
       await this.wait();
       return { rows: result };
     }
@@ -46,10 +57,21 @@ class FakeDb implements Queryable {
       this.failNextUpdate = false;
       throw new Error('connection lost');
     }
-    const [ids, xs, zs, hps, items] = params as [number[], number[], number[], number[], string[]];
+    const [ids, xs, zs, hps, items, weapons] = params as [
+      number[],
+      number[],
+      number[],
+      number[],
+      string[],
+      (string | null)[],
+    ];
     ids.forEach((id, i) => {
       // 背包是按 JSON 文本传进来的，库里存的是解析之后的值。
-      if (this.rows.has(id)) this.rows.set(id, { x: xs[i], z: zs[i], hp: hps[i], items: JSON.parse(items[i]) });
+      if (!this.rows.has(id)) return;
+      const row: Row = { x: xs[i], z: zs[i], hp: hps[i], items: JSON.parse(items[i]) };
+      // 空手的行不带 weapon，这样只关心位置、血量和背包的断言不用每次都写上它。
+      if (weapons[i] !== null) row.weapon = weapons[i];
+      this.rows.set(id, row);
     });
     this.updates++;
     return { rows: [] };
@@ -62,12 +84,18 @@ class FakeDb implements Queryable {
   }
 }
 
-function state(x: number, z: number, hp: number, items: Inventory = {}): CharacterState {
-  return { x, z, hp, items };
+function state(x: number, z: number, hp: number, items: Inventory = {}, weapon: ItemId | null = null): CharacterState {
+  return { x, z, hp, items, weapon };
 }
 
-function saved(x: number, z: number, hp: number | null, items: Inventory = {}): SavedCharacter {
-  return { x, z, hp, items };
+function saved(
+  x: number,
+  z: number,
+  hp: number | null,
+  items: Inventory = {},
+  weapon: ItemId | null = null,
+): SavedCharacter {
+  return { x, z, hp, items, weapon };
 }
 
 function setup() {
@@ -232,11 +260,46 @@ describe('CharacterStore 的背包', () => {
 
   it('库里的背包有不认识的物品或不合法的数量时，只留下合法的部分', async () => {
     const { db, store } = setup();
-    db.rows.set(5, { x: 1, z: 1, hp: 10, items: { gold: 7.9, potion: -3, sword: 1, __proto__: 4 } });
+    db.rows.set(5, { x: 1, z: 1, hp: 10, items: { gold: 7.9, potion: -3, wand: 1, __proto__: 4 } });
     db.rows.set(6, { x: 1, z: 1, hp: 10, items: { gold: '12', potion: 1e12 } });
     db.rows.set(7, { x: 1, z: 1, hp: 10, items: 'broken' });
     expect((await store.load(5))!.items).toEqual({ gold: 7 });
     expect((await store.load(6))!.items).toEqual({ potion: 20 });
     expect((await store.load(7))!.items).toEqual({});
+  });
+});
+
+describe('CharacterStore 的武器', () => {
+  it('手里的武器和背包一起写进库，再读出来还是它', async () => {
+    const { db, store } = setup();
+    store.markDirty(2, state(7, 8, 60, { gold: 3 }, 'sword'));
+    await store.flush();
+    expect(db.rows.get(2)).toEqual({ x: 7, z: 8, hp: 60, items: { gold: 3 }, weapon: 'sword' });
+    expect(await store.load(2)).toEqual(saved(7, 8, 60, { gold: 3 }, 'sword'));
+  });
+
+  it('收起武器之后，库里的武器变回空', async () => {
+    const { db, store } = setup();
+    db.rows.set(5, { x: 1, z: 1, hp: 10, items: {}, weapon: 'sword' });
+    expect((await store.load(5))!.weapon).toBe('sword');
+    store.markDirty(5, state(1, 1, 10, { sword: 1 }, null));
+    // 还没写进库时，读到的也是空手。
+    expect(await store.load(5)).toEqual(saved(1, 1, 10, { sword: 1 }, null));
+    await store.flush();
+    expect(db.rows.get(5)).toEqual({ x: 1, z: 1, hp: 10, items: { sword: 1 } });
+    expect((await store.load(5))!.weapon).toBeNull();
+  });
+
+  it('加武器这一列之前存的角色，读出来是空手', async () => {
+    const { store } = setup();
+    expect((await store.load(4))!.weapon).toBeNull();
+  });
+
+  it('库里的武器不是物品表里的武器时，当作空手', async () => {
+    const { db, store } = setup();
+    db.rows.set(5, { x: 1, z: 1, hp: 10, items: {}, weapon: 'wand' });
+    db.rows.set(6, { x: 1, z: 1, hp: 10, items: {}, weapon: 'potion' });
+    db.rows.set(7, { x: 1, z: 1, hp: 10, items: {}, weapon: '' });
+    for (const id of [5, 6, 7]) expect((await store.load(id))!.weapon).toBeNull();
   });
 });

@@ -37,6 +37,7 @@ export const CORRECTION_THRESHOLD = 1.5;
 // ---- 战斗 ----
 
 export const PLAYER_MAX_HP = 100;
+/** 空手时每次攻击的伤害。拿着武器时再加上武器的攻击力，见 items.ts 的 attackDamage。 */
 export const PLAYER_ATTACK_DAMAGE = 12;
 export const PLAYER_ATTACK_INTERVAL_MS = 800;
 /** 近战能打到的最远距离，由服务端判定。 */
@@ -94,9 +95,28 @@ export const GOLD_DROP_MIN = 3;
 export const GOLD_DROP_MAX = 8;
 /** 怪物掉落治疗药水的概率。 */
 export const POTION_DROP_CHANCE = 0.25;
+/** 怪物掉落一把剑的概率。 */
+export const SWORD_DROP_CHANCE = 0.05;
 /** 一瓶治疗药水回复的血量，以及两次喝药之间的最短间隔。 */
 export const POTION_HEAL = 40;
 export const POTION_COOLDOWN_MS = 5000;
+
+// ---- 商人 ----
+
+export const MERCHANT_NAME = '商人';
+/**
+ * 商人站在地图中心偏这么远的地方。他不会动，位置对所有人都一样，所以不是服务器下发的实体，
+ * 客户端和服务器各自从地图大小算出来（见 shop.ts 的 merchantPosition）。
+ * 这个位置加上 SHOP_RANGE 必须还在出生点的空地（SPAWN_CLEAR_RADIUS）里面，这样他周围不会有墙。
+ */
+export const MERCHANT_OFFSET_X = 6.5;
+export const MERCHANT_OFFSET_Z = -5.5;
+/** 离商人这么近才能买卖，由服务端判定。 */
+export const SHOP_RANGE = 4;
+/** 客户端走到这个距离内才打开商店、发买卖的请求。比 SHOP_RANGE 小，给服务端位置的滞后留余量。 */
+export const CLIENT_SHOP_RANGE = 3;
+/** 一次买卖最多多少个。 */
+export const MAX_TRADE_COUNT = 20;
 
 export const MAX_NAME_LENGTH = 16;
 export const SERVER_PORT = 8080;

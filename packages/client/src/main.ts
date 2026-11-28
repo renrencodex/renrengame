@@ -28,7 +28,8 @@ import { Net } from './net';
 type View = 'login' | 'resume' | 'ended';
 
 const CONTROLS =
-  '点击地面移动，按住可以连续移动；点击怪物攻击；怪物掉的东西走到旁边就会捡起来；按 1 喝治疗药水；滚轮缩放。';
+  '点击地面移动，按住可以连续移动；点击怪物攻击；怪物掉的东西走到旁边就会捡起来；' +
+  '按 1 喝治疗药水，按 B 打开背包、装备捡到的武器；点出生点旁边的商人买卖东西；滚轮缩放。';
 
 const HINTS: Record<View, string> = {
   login: `登录或注册后进入世界。${CONTROLS}`,

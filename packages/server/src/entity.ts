@@ -31,6 +31,8 @@ export interface Player extends EntityBase {
   nextRegenAt: number;
   /** 背包。数量为 0 的物品不留在里面。 */
   inventory: Inventory;
+  /** 手里拿的武器，空手是 null。它不算在背包里。 */
+  weapon: ItemId | null;
   /** 下一次能喝药水的时间。 */
   nextPotionAt: number;
 }

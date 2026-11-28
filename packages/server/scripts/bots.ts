@@ -1,6 +1,7 @@
 /**
  * 机器人压测：连上 N 个机器人在地图上随机走动，附近有怪物时上去打，地上有东西就去捡，血少了喝药水，
- * 统计每个机器人收到的同步量，以及命中、击杀、死亡、拾取和喝药水的次数。
+ * 捡到武器就拿在手里，离商人不远时去卖掉多余的武器、买药水，
+ * 统计每个机器人收到的同步量，以及命中、击杀、死亡、拾取、喝药水、装备武器和买卖的次数。
  *
  * 用法：pnpm bots [--count 200] [--duration 30] [--url ws://localhost:8080/ws] [--password ...] [--peaceful]
  * duration 为 0 时一直运行，直到按 Ctrl+C。加 --peaceful 时机器人只走路、不主动打怪（怪物仍然会打它们）。
@@ -14,12 +15,19 @@ import {
   API_PATH,
   CLIENT_ATTACK_RANGE,
   CLIENT_MOVE_DISTANCE,
+  CLIENT_SHOP_RANGE,
   decodeServerMsg,
   encode,
   generateMap,
   isValidMoveTarget,
+  ITEM_IDS,
+  ITEMS,
+  MAX_TRADE_COUNT,
+  maxBuy,
+  merchantPosition,
   PLAYER_MAX_HP,
   POTION_COOLDOWN_MS,
+  sellProblem,
   SERVER_PORT,
   STATE_DEAD,
   STATE_MOVING,
@@ -34,6 +42,7 @@ import type {
   EntityState,
   GameMap,
   Inventory,
+  ItemId,
   Point,
 } from '@mmo/shared';
 
@@ -69,6 +78,12 @@ const LOOT_GIVE_UP_MS = 6000;
 const LOOT_EVERY_MS = 500;
 /** 血量低于这个比例时喝药水。 */
 const DRINK_BELOW = 0.5;
+/** 离商人这么近、又有东西要买卖时才去找他；太远就先不管。 */
+const SHOP_TRIP_RADIUS = 45;
+/** 药水不到这么多瓶、金币又够的时候，去商人那里补到这么多。 */
+const POTIONS_WANTED = 3;
+/** 去商人那里的路上重新发移动命令、到了之后连着做买卖的间隔。 */
+const SHOP_EVERY_MS = 500;
 /** 同时进行的登录请求数。服务端算密码哈希比较慢，开太多只会排队。 */
 const LOGIN_CONCURRENCY = 8;
 
@@ -147,10 +162,20 @@ class Bot {
   pickups = 0;
   goldGained = 0;
   potionsUsed = 0;
+  /** 捡到的武器数，和把武器拿到手里的次数。 */
+  weaponsGained = 0;
+  equips = 0;
+  /** 现在手里拿着的武器。 */
+  weapon: ItemId | null = null;
   nextMoveAt = 0;
   private hp = PLAYER_MAX_HP;
   private inventory: Inventory | null = null;
+  /** 和商人做成的买、卖的次数。 */
+  buys = 0;
+  sells = 0;
   private nextPotionAt = 0;
+  private nextEquipAt = 0;
+  private nextShopAt = 0;
   private lootId = 0;
   private lootSince = 0;
   private nextLootAt = 0;
@@ -242,26 +267,46 @@ class Bot {
         this.lastAttacker.set(msg.to, msg.from);
         break;
       case 'inv':
-        this.onInventory(msg.items);
+        this.onInventory(msg.items, msg.weapon);
         break;
+      case 'weapon':
       case 'heal':
       case 'pong':
         break;
     }
   }
 
-  /** 和上一次的背包比：多出来的是捡到的，药水少了是喝掉的。 */
-  private onInventory(items: Inventory): void {
+  /**
+   * 和上一次的背包比，看出刚才发生了什么。手里的武器也算在内，装备、卸下不算得失。
+   * 金币少了一定是买了东西；金币多了、同时别的东西少了是卖了东西；
+   * 其余多出来的是捡到的，药水少了是喝掉的。服务器每件事各发一次背包，不会混在一起。
+   */
+  private onInventory(items: Inventory, weapon: ItemId | null): void {
     const before = this.inventory;
+    const weaponBefore = this.weapon;
     this.inventory = items;
+    this.weapon = weapon;
     if (!before) return;
-    const gold = (items.gold ?? 0) - (before.gold ?? 0);
-    const potions = (items.potion ?? 0) - (before.potion ?? 0);
-    if (gold > 0) {
-      this.pickups++;
-      this.goldGained += gold;
+    if (weapon && weapon !== weaponBefore) this.equips++;
+    const delta = (id: ItemId): number =>
+      (items[id] ?? 0) + (weapon === id ? 1 : 0) - (before[id] ?? 0) - (weaponBefore === id ? 1 : 0);
+    const gold = delta('gold');
+    if (gold < 0) {
+      this.buys++;
+      return;
     }
-    if (potions > 0) this.pickups++;
+    if (gold > 0 && ITEM_IDS.some((id) => id !== 'gold' && delta(id) < 0)) {
+      this.sells++;
+      return;
+    }
+    for (const id of ITEM_IDS) {
+      const gained = delta(id);
+      if (gained <= 0) continue;
+      this.pickups++;
+      if (id === 'gold') this.goldGained += gained;
+      else if (ITEMS[id].weapon) this.weaponsGained += gained;
+    }
+    const potions = delta('potion');
     if (potions < 0) {
       this.potionsUsed -= potions;
       this.nextPotionAt = Date.now() + POTION_COOLDOWN_MS;
@@ -284,11 +329,16 @@ class Bot {
     this.dead = dead;
   }
 
-  /** 每 100 毫秒调用一次：死了就等复活，血少了喝药水，手头没有怪物时先捡东西，附近有怪物就打，否则随机走动。 */
+  /**
+   * 每 100 毫秒调用一次：死了就等复活，血少了喝药水，手头没有怪物时先捡东西，
+   * 离商人不远又有东西要买卖就去找他，附近有怪物就打，否则随机走动。
+   */
   act(now: number): void {
     if (!this.ready || !map || this.dead) return;
     this.drink(now);
+    this.arm(now);
     if (this.targetId === 0 && this.loot(now, map)) return;
+    if (this.targetId === 0 && this.shop(now, map)) return;
     if (FIGHT && this.fight(now, map)) return;
     this.wander(now, map);
   }
@@ -299,6 +349,58 @@ class Bot {
     // 先按一秒算，等服务器确认喝掉了再按真正的冷却时间算。
     this.nextPotionAt = now + 1000;
     this.send({ t: 'use', item: 'potion' });
+  }
+
+  /** 空着手、背包里有武器时，把它拿到手里。 */
+  private arm(now: number): void {
+    if (this.weapon || !this.inventory || now < this.nextEquipAt) return;
+    const item = ITEM_IDS.find((id) => ITEMS[id].weapon && (this.inventory?.[id] ?? 0) > 0);
+    if (!item) return;
+    this.nextEquipAt = now + 1000;
+    this.send({ t: 'equip', item });
+  }
+
+  /**
+   * 现在最想和商人做的一笔买卖，没有时返回 null。
+   * 先卖掉多余的武器（手里有一把就够了），空着手又买得起就买一把，再把药水补到 POTIONS_WANTED 瓶。
+   */
+  private nextTrade(items: Inventory): ClientMsg | null {
+    const weapons = ITEM_IDS.filter((id) => ITEMS[id].weapon);
+    for (const id of weapons) {
+      // 空着手时留一把，arm() 会把它拿起来。
+      const spare = Math.min(MAX_TRADE_COUNT, (items[id] ?? 0) - (this.weapon ? 0 : 1));
+      if (spare > 0 && sellProblem(items, id, spare) === null) return { t: 'sell', item: id, count: spare };
+    }
+    if (!this.weapon && !weapons.some((id) => (items[id] ?? 0) > 0)) {
+      const id = weapons.find((w) => maxBuy(items, w) >= 1);
+      if (id) return { t: 'buy', item: id, count: 1 };
+    }
+    const potions = Math.min(POTIONS_WANTED - (items.potion ?? 0), maxBuy(items, 'potion'));
+    if (potions > 0) return { t: 'buy', item: 'potion', count: potions };
+    return null;
+  }
+
+  /**
+   * 找商人买卖：离他不远、又有买卖可做时走过去，到了跟前一笔一笔地做。
+   * 返回 false 表示现在不用去。和真正的客户端一样，走到 CLIENT_SHOP_RANGE 以内才发请求。
+   */
+  private shop(now: number, map: GameMap): boolean {
+    if (!this.inventory) return false;
+    const merchant = merchantPosition(map.size);
+    const distance = Math.hypot(merchant.x - this.x, merchant.z - this.z);
+    if (distance > SHOP_TRIP_RADIUS) return false;
+    const trade = this.nextTrade(this.inventory);
+    if (!trade) return false;
+    if (now < this.nextShopAt) return true;
+    this.nextShopAt = now + SHOP_EVERY_MS;
+    if (distance <= CLIENT_SHOP_RANGE) {
+      this.send(trade);
+    } else if (isValidMoveTarget(map, this.x, this.z, merchant.x, merchant.z + 1, CLIENT_MOVE_DISTANCE)) {
+      this.send({ t: 'moveTo', x: merchant.x, z: merchant.z + 1 });
+    } else {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -461,6 +563,11 @@ function report(label: string): void {
   let pickups = 0;
   let gold = 0;
   let potionsUsed = 0;
+  let weapons = 0;
+  let equips = 0;
+  let armed = 0;
+  let buys = 0;
+  let sells = 0;
   let dropsSum = 0;
   for (const b of bots) {
     snaps += b.snaps;
@@ -473,8 +580,13 @@ function report(label: string): void {
     pickups += b.pickups;
     gold += b.goldGained;
     potionsUsed += b.potionsUsed;
+    weapons += b.weaponsGained;
+    equips += b.equips;
+    buys += b.buys;
+    sells += b.sells;
   }
   for (const b of online) {
+    if (b.weapon) armed++;
     dropsSum += b.drops.size;
     visibleSum += b.visible.size;
     visibleMax = Math.max(visibleMax, b.visible.size);
@@ -485,7 +597,8 @@ function report(label: string): void {
       `掉落物 平均 ${(dropsSum / n).toFixed(1)} | ` +
       `每个机器人 ${((snaps - lastSnaps) / seconds / n).toFixed(1)} 快照/秒 ${((bytes - lastBytes) / seconds / n / 1024).toFixed(2)} KB/秒 | ` +
       `快照里的未知实体 ${unknown} | 累计 命中 ${hitsDealt} 被命中 ${hitsTaken} 击杀 ${kills} 死亡 ${deaths} ` +
-      `拾取 ${pickups} 堆（金币 ${gold}）喝药水 ${potionsUsed}`,
+      `拾取 ${pickups} 堆（金币 ${gold}，武器 ${weapons}）喝药水 ${potionsUsed} 装备武器 ${equips} 次（现在 ${armed} 个拿着武器）` +
+      ` 找商人 买 ${buys} 次 卖 ${sells} 次`,
   );
   lastReportAt = now;
   lastSnaps = snaps;

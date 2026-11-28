@@ -6,7 +6,7 @@
 // <素材目录> 里要有这个解压后的文件夹（CC0 授权，来源见 README）：
 //   Fantasy Props MegaKit[Standard]/
 //
-// 输出 item_gold.glb 和 item_potion.glb。
+// 输出 item_gold.glb、item_potion.glb 和 item_sword.glb。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,6 +28,8 @@ const MODEL_DIR = path.join(sourceDir, 'Fantasy Props MegaKit[Standard]/Exports/
 const ITEMS = [
   { out: 'item_gold.glb', source: 'Coin_Pile.gltf', metallic: 0.6, roughness: 0.35 },
   { out: 'item_potion.glb', source: 'Potion_2.gltf', metallic: 0, roughness: 0.3 },
+  // 剑同时也是拿在手里的模型：剑身沿 Y 轴朝上，原点在握柄上。
+  { out: 'item_sword.glb', source: 'Sword_Bronze.gltf', metallic: 0.6, roughness: 0.4 },
 ];
 
 const KEPT_ATTRIBUTES = new Set(['POSITION', 'NORMAL', 'COLOR_0']);

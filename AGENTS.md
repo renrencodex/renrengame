@@ -29,7 +29,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 ## 改完代码怎么验证
 
 1. 每次都跑 `pnpm typecheck` 和 `pnpm test`。
-2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。机器人会打怪和捡东西，“命中”和“拾取”应该大于 0；机器人很多时它们几乎不会死，也不喝药水，这些要用很少的机器人（`--count 30 --duration 60`）、单测或者自己进游戏验证。
+2. 改了服务器、协议或同步逻辑，再跑一次机器人压测。输出里“快照里的未知实体”必须是 0，结尾的服务端统计里 `skippedTicks` 必须是 0。机器人会打怪、捡东西、捡到武器就装备、攒够金币去找商人，“命中”和“拾取”应该大于 0（剑掉得少，“装备武器”可能是 0）；机器人很多时它们几乎不会死，也不喝药水，分到的金币也不够买东西，这些要用很少的机器人（`--count 30 --duration 60`）、单测或者自己进游戏验证。
 3. 改了客户端的画面或交互，单测覆盖不到。可以用无头 Chromium 打开页面检查，启动参数加 `--use-angle=swiftshader --enable-unsafe-swiftshader` 才有 WebGL。做不了就在回复里明确说画面没有验证过。
 
 新增逻辑时把测试放在对应包的 `test/` 目录，文件名以 `.test.ts` 结尾。
@@ -38,7 +38,7 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 
 **服务器权威**
 
-- 客户端只发送意图（`moveTo`：想去哪，`target`：想打谁，`use`：想用哪种物品），位置、血量、背包等状态一律由服务器计算。不要加“客户端上报自己位置”“客户端上报造成了多少伤害”“客户端上报捡到了什么”这类消息。
+- 客户端只发送意图（`moveTo`：想去哪，`target`：想打谁，`use`：想用哪种物品，`equip`、`unequip`：想拿起或收起哪件武器，`buy`、`sell`：想和商人买卖什么），位置、血量、背包、装备、金币等状态一律由服务器计算。不要加“客户端上报自己位置”“客户端上报造成了多少伤害”“客户端上报捡到了什么”这类消息。
 - 每一种客户端消息都要在 `shared/src/protocol.ts` 的 `decodeClientMsg` 里严格校验字段类型和范围，校验不过就丢弃。
 
 **追击由客户端驱动，服务端只判定伤害**
@@ -58,9 +58,27 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 地上的物品（`Drop`）是第三种实体，和玩家、怪物共用 id 空间、AOI、`enter` 和 `leave`，但它不会动，**不出现在快照里**。`EntityInfo` 是 `CharacterInfo | DropInfo`，用到 `name`、`hp`、`state` 之前先按 `kind` 区分。
 - 拾取没有客户端消息：`World.tick` 里每个活着的玩家检查脚边 `PICKUP_RADIUS` 内的物品（`server/src/drops.ts` 的小格子索引），捡到就移出视野。客户端点地上的物品只是发一次普通的 `moveTo`。
 - 背包只有服务器能改，每次变化都把整个背包用 `inv` 发给玩家自己。客户端拿前后两次的背包比较，得出“捡到了什么”“是不是刚喝了药水”，不要为这些再加消息。`heal` 和 `hit` 一样只用来飘字，积压时会被丢掉。
-- 加一种物品要改三处：`shared/src/items.ts` 的 `ITEMS`、`client/src/drops.ts` 的 `ITEM_LOOKS`，以及 `tools/models/build-items.mjs`（生成 `item_<物品名>.glb`；没有模型时客户端用小方块代替）。
+- 加一种物品要改三处：`shared/src/items.ts` 的 `ITEMS`、`client/src/drops.ts` 的 `ITEM_LOOKS`，以及 `tools/models/build-items.mjs`（生成 `item_<物品名>.glb`；没有模型时客户端用小方块代替）。武器还要在 `ITEMS` 里写 `weapon`，在 `ITEM_LOOKS` 里写 `held`（拿在手里时的大小和握的位置）。想让商人卖它或者收它，在 `ITEMS` 里写价格，商店面板会自己多出一行。
 - 背包存在 `characters.items` 这一列（JSON，比如 `{"gold": 12, "potion": 2}`），和位置、血量一起由 `CharacterStore` 写库。读出来要经过 `sanitizeInventory`，所以从 `ITEMS` 里删掉一种物品时，存档里的这种物品会在下次上线后消失。
-- 掉什么、掉在哪用的是 `World` 构造函数的第二个参数（默认 `Math.random`）。单测里只要有怪物被打死，就传一个固定的函数进去，否则掉落的位置和拾取的时机每次都不一样。
+- 掉什么、掉在哪用的是 `World` 构造函数的第二个参数（默认 `Math.random`）。单测里只要有怪物被打死，就传一个固定的函数进去，否则掉落的位置和拾取的时机每次都不一样。`dropLoot` 取随机数的顺序是固定的（金币数量、方向、金币的距离、药水、药水的距离、剑、剑的距离），单测按这个顺序给数；新增的掉落放在最后，否则已有的单测都要重排。
+
+**武器和装备**
+
+- 手里的武器不在背包里：`Player.weapon` 是单独的一个栏位，`World.equip` 把一件武器从背包挪到手上，`World.unequip` 挪回去（背包里这种武器已经放满时卸不下来）。数背包里的东西时不要把手里那件算进去，也不要漏掉它：客户端比较前后两次 `inv` 时是把手里的武器加回去再比的，这样装备、卸下不会被当成“捡到了一件”。
+- `inv` 同时带着背包和手里的武器，只发给玩家自己。别的玩家通过 `enter`（`CharacterInfo.weapon`，空手和怪物没有这个字段）和 `weapon` 消息知道一个人拿着什么。`weapon` 消息和 `enter`、`leave` 一样不能丢，不要把它加进积压时丢弃的那一类。
+- 攻击力只在 `shared/src/items.ts` 的 `attackDamage` 里算，服务器结算伤害和客户端显示攻击力用的是同一个函数。
+- 捡到武器不会自动装备；死亡不掉武器，倒地时不能装备和卸下。
+- 手里的武器存在 `characters.weapon` 这一列（空表示空手），读出来要经过 `sanitizeWeapon`。
+- 客户端把武器模型挂在人物模型的 `Weapon_R` 节点下面（`tools/models/build.mjs` 生成的，在右手手心）：节点的 +Y 是剑身的方向，原点是握的位置。武器模型要剑身朝 +Y，握柄的位置用 `ITEM_LOOKS` 的 `held.grip` 对准。
+
+**商人和买卖**
+
+- 商人不是服务器的实体：他不会动，位置由 `shared/src/shop.ts` 的 `merchantPosition(地图大小)` 算出来，没有 id，不进 AOI、`enter`、`leave` 和快照。客户端自己在那个位置画一个人（`EntityView` 的 `kind: 'npc'`）和一块地毯。不要为了“让客户端知道商人在哪”加消息。
+- 走到商人跟前是客户端发的普通 `moveTo`，服务器不知道“去找商人”这回事。服务器只在 `World.buy`、`World.sell` 里判定：活着、按服务器算的位置离商人不超过 `SHOP_RANGE`、通过 `buyProblem` / `sellProblem`。成了就发一次 `inv`，不成什么也不发；没有“买卖结果”这种消息，客户端也是从前后两次 `inv` 看出结果的。
+- `buyProblem`、`sellProblem`、`maxBuy` 在 `shared/src/shop.ts`，服务器靠它们决定买卖成不成，客户端靠它们决定按钮能不能点、Shift 一次买几个。改规则只改这一处。
+- 客户端打开商店的距离 `CLIENT_SHOP_RANGE` 故意比 `SHOP_RANGE` 小，和攻击距离是同一个道理；改其中一个时保持这个关系。商人的位置加上 `SHOP_RANGE` 必须还在出生点的空地（`SPAWN_CLEAR_RADIUS`）里面，这样不用判断中间有没有墙（`shared/test/shop.test.ts` 里有检查）。
+- 价格写在 `ITEMS` 的 `buyPrice`（商人卖多少钱，没有就是不卖）和 `sellPrice`（商人收多少钱，没有就是不收）里。`sellPrice` 必须比 `buyPrice` 低，否则可以倒手刷金币。
+- 一笔买卖要么全成要么不成，不会只买一部分。拿在手里的武器不在背包里，所以卖不掉，要先收回背包。
 
 **共用的规则放在 shared**
 
@@ -113,6 +131,6 @@ deploy/deploy.sh  # 把已提交的代码部署到本机（需要 root，见“�
 - 单测里要放障碍物时，在 `new World(map)` 之前改 `map.blocked`。`World` 在构造时为怪物复制了一份地图，之后再改，怪物看不到。
 - 数据库和 Redis 可能和别的项目共用同一个实例。只操作 `DATABASE_URL` 指向的库和带 `mmo:` 前缀的键，不要停止或重启这些服务，不要执行 `DROP`、`TRUNCATE`、`FLUSHALL`。
 - 测试时创建的账号用完要删掉。压测脚本的“机器人N”账号用的是公开的默认密码，只能出现在本地环境。
-- `packages/client/public/models/` 里的人物模型是 `tools/models/build.mjs` 生成的，不要手工改。客户端按名字找模型里的材质（`Skin`、`Shirt`、`Pants`、`Boots`、`Hair`、`Eyes`）、节点（`Hair`）和动作（`Idle_Loop`、`Jog_Fwd_Loop`、`Punch_Jab`、`Punch_Cross`、`Death01`），改脚本里的名字要同时改 `packages/client/src/entities.ts`。物品模型 `item_<物品名>.glb` 是 `tools/models/build-items.mjs` 生成的，客户端按文件名加载。重新生成的步骤和素材的来源、授权见 README 的“素材”。
-- 存档只在角色进过世界之后才读：`CharacterStore.load` 对位置为空的角色返回 `null`，这时 `items` 列也不会被读。测试时想预先给角色放物品，要把 `x`、`z` 一起填上。
+- `packages/client/public/models/` 里的人物模型是 `tools/models/build.mjs` 生成的，不要手工改。客户端按名字找模型里的材质（`Skin`、`Shirt`、`Pants`、`Boots`、`Hair`、`Eyes`）、节点（`Hair`、`Weapon_R`）和动作（`Idle_Loop`、`Jog_Fwd_Loop`、`Punch_Jab`、`Punch_Cross`、`Sword_Idle`、`Sword_Attack`、`Death01`），改脚本里的名字要同时改 `packages/client/src/entities.ts`。物品模型 `item_<物品名>.glb` 是 `tools/models/build-items.mjs` 生成的，客户端按文件名加载。重新生成的步骤和素材的来源、授权见 README 的“素材”。
+- 存档只在角色进过世界之后才读：`CharacterStore.load` 对位置为空的角色返回 `null`，这时 `items` 列也不会被读。测试时想预先给角色放物品或武器，要把 `x`、`z` 一起填上。
 - `packages/client/vite.config.ts` 的 `allowedHosts` 里放行了一个远程预览域名，换预览环境时要在这里加新的域名。

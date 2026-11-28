@@ -67,11 +67,11 @@ interface OnlinePlayer {
 
 /** 玩家当前要存档的状态。死亡状态存成 0 血，下次上线时在出生点满血复活。 */
 function toSave(state: PlayerState): CharacterState {
-  return { x: state.x, z: state.z, hp: state.dead ? 0 : state.hp, items: state.items };
+  return { x: state.x, z: state.z, hp: state.dead ? 0 : state.hp, items: state.items, weapon: state.weapon };
 }
 
 function sameSave(a: CharacterState | SavedCharacter, b: CharacterState): boolean {
-  return a.x === b.x && a.z === b.z && a.hp === b.hp && sameInventory(a.items, b.items);
+  return a.x === b.x && a.z === b.z && a.hp === b.hp && a.weapon === b.weapon && sameInventory(a.items, b.items);
 }
 
 async function main(): Promise<void> {
@@ -108,7 +108,7 @@ async function main(): Promise<void> {
           return;
         }
         // 快照可以丢，下一个快照会补上；命中和回血消息只用来播放动作和飘字，血量以快照为准，也可以丢。
-        // enter、leave 和背包不能丢。
+        // enter、leave、背包和换武器的消息不能丢。
         if ((msg.t === 'snap' || msg.t === 'hit' || msg.t === 'heal') && buffered > SNAPSHOT_DROP_BYTES) return;
         let data = encoded.get(msg);
         if (data === undefined) {
@@ -186,7 +186,7 @@ async function main(): Promise<void> {
 
     const existing = online.get(session.accountId);
     if (existing) {
-      // 顶号：新连接接着旧连接当前的位置、血量和背包继续。
+      // 顶号：新连接接着旧连接当前的位置、血量、背包和武器继续。
       const state = world.getPlayer(existing.playerId);
       if (state) saved = toSave(state);
       const oldWs = existing.client.ws;
@@ -198,8 +198,8 @@ async function main(): Promise<void> {
       return;
     }
     const { spawn, hp } = spawnFromSave(saved, (x, z) => isWalkable(map, x, z));
-    // 背包不受死亡和位置的影响，存档里有就原样带进去。
-    const playerId = world.join(session.name, client.conn, performance.now(), spawn, hp, saved?.items);
+    // 背包和手里的武器不受死亡和位置的影响，存档里有就原样带进去。
+    const playerId = world.join(session.name, client.conn, performance.now(), spawn, hp, saved?.items, saved?.weapon);
     const state = world.getPlayer(playerId);
     const entered = state ? toSave(state) : null;
     const player: OnlinePlayer = {
@@ -289,6 +289,18 @@ async function main(): Promise<void> {
         case 'use':
           if (client.player) world.useItem(client.player.playerId, msg.item, now);
           break;
+        case 'equip':
+          if (client.player) world.equip(client.player.playerId, msg.item);
+          break;
+        case 'unequip':
+          if (client.player) world.unequip(client.player.playerId);
+          break;
+        case 'buy':
+          if (client.player) world.buy(client.player.playerId, msg.item, msg.count);
+          break;
+        case 'sell':
+          if (client.player) world.sell(client.player.playerId, msg.item, msg.count);
+          break;
         case 'ping':
           client.conn.send({ t: 'pong', c: msg.c, s: now });
           break;
@@ -354,7 +366,7 @@ async function main(): Promise<void> {
         `[stats] players=${s.players} tick avg=${s.tickMs.avg}ms max=${s.tickMs.max}ms ` +
           `pathfinds=${s.pathfinds} deferred=${s.deferredPathfinds} rejected=${s.rejectedMoves} skipped=${s.skippedTicks} ` +
           `monsters=${s.monsters} monsterPathfinds=${s.monsterPathfinds} hits=${s.hits} ` +
-          `drops=${s.drops} dropped=${s.dropped} pickedUp=${s.pickedUp}`,
+          `drops=${s.drops} dropped=${s.dropped} pickedUp=${s.pickedUp} bought=${s.bought} sold=${s.sold}`,
       );
     }
   }, STATS_WINDOW_MS);

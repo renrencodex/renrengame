@@ -15,18 +15,29 @@ interface ItemLook {
   tint: [number, number, number];
   /** 地上光晕的颜色；没有模型时，代替它的小方块也用这个颜色。 */
   color: number;
+  /** 掉在地上时向一侧倾斜的角度（弧度）。剑的模型是竖着的，斜着放才不会像一根插在地上的杆子。 */
+  tilt?: number;
+  /**
+   * 只有武器有，拿在手里时用：grip 是握柄的中点在模型里的高度（米），这一点对准手心；
+   * scale 是放大倍数，原始模型拿在这些人物手里显得太长。
+   */
+  held?: { grip: number; scale: number };
 }
 
 const ITEM_LOOKS: Record<ItemId, ItemLook> = {
   gold: { scale: 4, tint: [1.35, 2.1, 1], color: 0xffcf4a },
   potion: { scale: 3, tint: [3.2, 3.2, 3.2], color: 0xff5a5a },
+  sword: { scale: 1.2, tint: [1.6, 2.2, 2.4], color: 0x9fd8ff, tilt: 1.05, held: { grip: -0.04, scale: 0.85 } },
 };
 
 /** 一种物品的模型。所有同种的掉落物共用它的几何体和材质。 */
 export interface ItemModel {
+  /** 掉在地上时的样子：已经放大、摆好角度，底部贴着地面，水平方向以自己的中心为原点。 */
   object: THREE.Object3D;
   /** 放大之后的高度。 */
   height: number;
+  /** 只有武器有：拿在手里时的样子，握柄的中点在原点，剑身沿 Y 轴。 */
+  held?: THREE.Object3D;
 }
 
 /** 加载成功的物品模型。缺了哪个，哪种物品就用小方块代替。 */
@@ -41,24 +52,53 @@ export async function loadItemAssets(): Promise<ItemAssets> {
       try {
         const gltf = await loader.loadAsync(`${import.meta.env.BASE_URL}models/item_${id}.glb`);
         const look = ITEM_LOOKS[id];
-        const object = gltf.scene;
-        object.scale.setScalar(look.scale);
-        object.traverse((child) => {
+        const source = gltf.scene;
+        source.traverse((child) => {
           const mesh = child as THREE.Mesh;
           if (!mesh.isMesh || Array.isArray(mesh.material)) return;
           mesh.castShadow = true;
           (mesh.material as THREE.MeshStandardMaterial).color.setRGB(...look.tint);
         });
-        object.updateMatrixWorld(true);
-        const height = new THREE.Box3().setFromObject(object).max.y;
+
+        // 地上的样子：放大、倾斜，再挪到“底部贴地、水平居中”的位置，这样它绕着自己的中心转。
+        const placed = source.clone();
+        placed.scale.setScalar(look.scale);
+        placed.rotation.z = look.tilt ?? 0;
+        placed.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(placed);
+        const height = box.max.y - box.min.y;
         if (!(height > 0)) throw new Error('模型没有高度');
-        assets[id] = { object, height };
+        placed.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
+        const model: ItemModel = { object: new THREE.Group().add(placed), height };
+
+        if (look.held) {
+          const held = source.clone();
+          held.scale.setScalar(look.held.scale);
+          held.position.y = -look.held.grip * look.held.scale;
+          model.held = new THREE.Group().add(held);
+        }
+        assets[id] = model;
       } catch (err) {
         console.warn(`物品模型 item_${id}.glb 加载失败，改用小方块显示。`, err);
       }
     }),
   );
   return assets;
+}
+
+let heldFallbackGeometry: THREE.BoxGeometry | undefined;
+
+/**
+ * 做一件拿在手里的武器，放到人物右手的 Weapon_R 节点下面用。
+ * 握住的地方在原点，剑身沿 Y 轴。模型没加载成功时用一根细长的方块代替。
+ */
+export function createHeldWeapon(item: ItemId, assets: ItemAssets): THREE.Object3D {
+  const held = assets[item]?.held;
+  if (held) return held.clone();
+  heldFallbackGeometry ??= new THREE.BoxGeometry(0.07, 0.95, 0.025).translate(0, 0.38, 0);
+  const mesh = new THREE.Mesh(heldFallbackGeometry, fallbackMaterial(item));
+  mesh.castShadow = true;
+  return mesh;
 }
 
 const FALLBACK_SIZE = 0.45;

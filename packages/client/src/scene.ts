@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { mulberry32, SAFE_ZONE_RADIUS } from '@mmo/shared';
+import { merchantPosition, mulberry32, SAFE_ZONE_RADIUS } from '@mmo/shared';
 import type { GameMap } from '@mmo/shared';
 
 const SKY_COLOR = 0xa8c8e8;
@@ -10,8 +10,9 @@ const SUN_OFFSET = new THREE.Vector3(-35, 60, 25);
 const OBSTACLE_INSET = 0.15;
 /** 地面贴图一格对应的世界单位。 */
 const GROUND_TILE = 4;
+const MERCHANT_RUG_RADIUS = 1.3;
 
-/** 3D 场景：地面、障碍物、安全区边界、光照和雾。 */
+/** 3D 场景：地面、障碍物、安全区边界、商人的地毯、光照和雾。 */
 export class WorldScene {
   readonly scene = new THREE.Scene();
   private readonly sun: THREE.DirectionalLight;
@@ -37,7 +38,13 @@ export class WorldScene {
     scene.add(sun, sun.target);
     this.sun = sun;
 
-    scene.add(createGround(map.size), createSurroundings(map.size), createObstacles(map), createSafeZoneRing(map.size));
+    scene.add(
+      createGround(map.size),
+      createSurroundings(map.size),
+      createObstacles(map),
+      createSafeZoneRing(map.size),
+      createMerchantRug(map.size),
+    );
     this.followSun(map.size / 2, map.size / 2);
   }
 
@@ -83,6 +90,30 @@ function createSafeZoneRing(size: number): THREE.Mesh {
   );
   ring.position.set(size / 2, 0.03, size / 2);
   return ring;
+}
+
+/**
+ * 商人脚下的地毯：一块深红色的圆垫子，外面一圈金边。
+ * 商人和玩家用的是同一种人物模型，靠这块地毯老远就能认出他站在哪。
+ */
+function createMerchantRug(size: number): THREE.Group {
+  const rug = new THREE.Group();
+  const mat = new THREE.Mesh(
+    new THREE.CircleGeometry(MERCHANT_RUG_RADIUS, 48),
+    new THREE.MeshStandardMaterial({ color: 0x8a2a3a, roughness: 1, metalness: 0 }),
+  );
+  mat.receiveShadow = true;
+  const trim = new THREE.Mesh(
+    new THREE.RingGeometry(MERCHANT_RUG_RADIUS - 0.12, MERCHANT_RUG_RADIUS, 48),
+    new THREE.MeshStandardMaterial({ color: 0xe8c060, roughness: 0.8, metalness: 0 }),
+  );
+  trim.position.z = 0.01;
+  trim.receiveShadow = true;
+  rug.add(mat, trim);
+  rug.rotation.x = -Math.PI / 2;
+  const at = merchantPosition(size);
+  rug.position.set(at.x, 0.02, at.z);
+  return rug;
 }
 
 /** 用 canvas 画一张可平铺的草地贴图，带浅浅的格线，移动时能看出速度。 */

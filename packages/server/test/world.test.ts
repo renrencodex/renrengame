@@ -50,7 +50,7 @@ describe('World', () => {
     const [welcome, inv, enter, ...rest] = conn.take();
     expect(rest).toEqual([]);
     expect(welcome).toEqual({ t: 'welcome', selfId: id, seed: 4242, serverTime: 1000 });
-    expect(inv).toEqual({ t: 'inv', items: {} });
+    expect(inv).toEqual({ t: 'inv', items: {}, weapon: null });
     expect(enter).toEqual({
       t: 'enter',
       entities: [{ id, kind: 'player', name: '小明', x: 100, z: 100, state: 0, hp: 100, maxHp: 100 }],

@@ -11,6 +11,7 @@ import {
   PLAYER_RESPAWN_MS,
   POTION_COOLDOWN_MS,
   POTION_HEAL,
+  SWORD_DROP_CHANCE,
   TICK_MS,
 } from '@mmo/shared';
 import type { DropInfo, ServerMsg } from '@mmo/shared';
@@ -93,7 +94,8 @@ describe('怪物掉落', () => {
   }
 
   it('怪物死后在尸体旁边掉一堆金币，看得到的玩家收到 enter', () => {
-    // 依次是：金币数量、方向、距离、是否掉药水。方向 0.5 是正西，玩家在东边够不着。
+    // 依次是：金币数量、方向、距离、是否掉药水、是否掉剑（序列用完后一直是最后一个数）。
+    // 方向 0.5 是正西，玩家在东边够不着。
     const { world, sim, conn } = killMonster(sequence(0.999, 0.5, 0.5, 0.9));
     const drops = enteredDrops(conn.take());
     expect(drops).toEqual([{ id: expect.any(Number), kind: 'drop', x: 99.65, z: 100.5, item: 'gold', count: GOLD_DROP_MAX }]);
@@ -124,6 +126,24 @@ describe('怪物掉落', () => {
     expect(world.dropCount).toBe(2);
   });
 
+  it('运气很好时掉一把剑，落在和金币、药水都不同的方向上', () => {
+    // 依次是：金币数量、方向、金币的距离、是否掉药水、药水的距离、是否掉剑、剑的距离。
+    const { world, conn } = killMonster(sequence(0, 0.5, 0.5, 0.1, 0.5, SWORD_DROP_CHANCE - 0.001, 0.5));
+    expect(enteredDrops(conn.take())).toEqual([
+      { id: expect.any(Number), kind: 'drop', x: 99.65, z: 100.5, item: 'gold', count: GOLD_DROP_MIN },
+      { id: expect.any(Number), kind: 'drop', x: 101.35, z: 100.5, item: 'potion', count: 1 },
+      { id: expect.any(Number), kind: 'drop', x: 100.5, z: 99.65, item: 'sword', count: 1 },
+    ]);
+    expect(world.dropCount).toBe(3);
+  });
+
+  it('掉不掉剑和掉不掉药水互不影响；刚好等于概率时不掉', () => {
+    const swordOnly = killMonster(sequence(0, 0.5, 0.5, 0.9, 0, 0.5));
+    expect(enteredDrops(swordOnly.conn.take()).map((d) => d.item)).toEqual(['gold', 'sword']);
+    const unlucky = killMonster(sequence(0, 0.5, 0.5, 0.9, SWORD_DROP_CHANCE));
+    expect(enteredDrops(unlucky.conn.take()).map((d) => d.item)).toEqual(['gold']);
+  });
+
   it('本来要落在墙里时，改成落在尸体的位置', () => {
     // 怪物西边的格子 (99, 100) 是墙。
     const { conn } = killMonster(sequence(0, 0.5, 0.5, 0.9), [[99, 100]]);
@@ -133,7 +153,8 @@ describe('怪物掉落', () => {
   });
 
   it('怪物重生后再被打死，会再掉一次', () => {
-    const { world, sim, monsterId, playerId } = killMonster(sequence(0, 0.5, 0.5, 0.9, 0, 0.5, 0.5, 0.9));
+    // 每次死亡用掉五个数：金币数量、方向、距离、是否掉药水、是否掉剑。
+    const { world, sim, monsterId, playerId } = killMonster(sequence(0, 0.5, 0.5, 0.9, 0.9, 0, 0.5, 0.5, 0.9, 0.9));
     expect(sim.runUntil(() => !world.getMonster(monsterId)!.dead, 30000)).toBe(true);
     world.setTarget(playerId, monsterId);
     expect(sim.runUntil(() => world.getMonster(monsterId)!.dead, 10000)).toBe(true);
@@ -321,7 +342,7 @@ describe('背包和药水', () => {
     const id = world.join('a', conn, 0, { x: 40.5, z: 40.5 }, undefined, saved);
     expect(conn.take().slice(0, 2)).toEqual([
       { t: 'welcome', selfId: id, seed: 0, serverTime: 0 },
-      { t: 'inv', items: { gold: 12, potion: 2 } },
+      { t: 'inv', items: { gold: 12, potion: 2 }, weapon: null },
     ]);
 
     // 拿到的是拷贝，改它不影响世界里的背包；世界也不会改传进去的存档。
@@ -339,7 +360,7 @@ describe('背包和药水', () => {
     const id = world.join('a', new FakeConn(), 0, { x: 40.5, z: 40.5 }, undefined, {
       gold: 3.7,
       potion: 9999,
-      sword: 1,
+      wand: 1,
     } as never);
     expect(world.getPlayer(id)!.items).toEqual({ gold: 3, potion: ITEMS.potion.maxCount });
   });
@@ -357,7 +378,7 @@ describe('背包和药水', () => {
     expect(world.useItem(id, 'potion', sim.now)).toBe(true);
     expect(world.getPlayer(id)).toMatchObject({ hp: 30 + POTION_HEAL, items: { potion: 2 } });
     const heal: ServerMsg = { t: 'heal', id, amount: POTION_HEAL };
-    expect(a.take()).toEqual([{ t: 'inv', items: { potion: 2 } }, heal]);
+    expect(a.take()).toEqual([{ t: 'inv', items: { potion: 2 }, weapon: null }, heal]);
     expect(b.take()).toEqual([heal]);
 
     // 冷却期间喝不了，也不消耗药水。

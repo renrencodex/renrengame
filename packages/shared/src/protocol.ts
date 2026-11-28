@@ -1,4 +1,4 @@
-import { MAX_NAME_LENGTH, MAX_TOKEN_LENGTH } from './constants';
+import { MAX_NAME_LENGTH, MAX_TOKEN_LENGTH, MAX_TRADE_COUNT } from './constants';
 import { isItemId } from './items';
 import type { Inventory, ItemId } from './items';
 
@@ -23,6 +23,8 @@ export interface CharacterInfo {
   state: EntityState;
   hp: number;
   maxHp: number;
+  /** 手里拿的武器。空手的玩家和怪物没有这一项。 */
+  weapon?: ItemId;
 }
 
 /** 地上的物品进入视野时下发的信息。它不会动，所以不出现在快照里，消失时和其他实体一样收到 leave。 */
@@ -49,6 +51,14 @@ export type ClientMsg =
   | { t: 'target'; id: number }
   /** 使用背包里的一个物品。 */
   | { t: 'use'; item: ItemId }
+  /** 把背包里的一件武器拿在手里。手里原来有武器的话，换下来的放回背包。 */
+  | { t: 'equip'; item: ItemId }
+  /** 把手里的武器收回背包。 */
+  | { t: 'unequip' }
+  /** 向商人买 count 个 item。要站在商人旁边。 */
+  | { t: 'buy'; item: ItemId; count: number }
+  /** 把背包里的 count 个 item 卖给商人。要站在商人旁边。 */
+  | { t: 'sell'; item: ItemId; count: number }
   | { t: 'ping'; c: number };
 
 export type ServerMsg =
@@ -60,8 +70,10 @@ export type ServerMsg =
   | { t: 'hit'; from: number; to: number; damage: number }
   /** 一次回血（喝药水）。和 hit 一样只用来显示数字，血量以快照为准。 */
   | { t: 'heal'; id: number; amount: number }
-  /** 自己背包的全部内容。进入世界时下发一次，之后每次变化再下发。 */
-  | { t: 'inv'; items: Inventory }
+  /** 自己背包的全部内容和手里的武器（空手是 null）。进入世界时下发一次，之后每次变化再下发。 */
+  | { t: 'inv'; items: Inventory; weapon: ItemId | null }
+  /** 视野里的某个玩家（包括自己）换了手里的武器，item 为 null 表示空手。 */
+  | { t: 'weapon'; id: number; item: ItemId | null }
   | { t: 'pong'; c: number; s: number };
 
 // 编解码都收在这里，以后换成二进制协议只需要改这个文件。
@@ -91,6 +103,13 @@ export function decodeClientMsg(raw: string): ClientMsg | null {
       return Number.isSafeInteger(m.id) && (m.id as number) >= 0 ? { t: 'target', id: m.id as number } : null;
     case 'use':
       return isItemId(m.item) ? { t: 'use', item: m.item } : null;
+    case 'equip':
+      return isItemId(m.item) ? { t: 'equip', item: m.item } : null;
+    case 'unequip':
+      return { t: 'unequip' };
+    case 'buy':
+    case 'sell':
+      return isItemId(m.item) && isTradeCount(m.count) ? { t: m.t, item: m.item, count: m.count } : null;
     case 'ping':
       return isFiniteNumber(m.c) ? { t: 'ping', c: m.c } : null;
     default:
@@ -119,4 +138,8 @@ export function sanitizeName(name: string, fallback: string): string {
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+function isTradeCount(v: unknown): v is number {
+  return Number.isSafeInteger(v) && (v as number) >= 1 && (v as number) <= MAX_TRADE_COUNT;
 }
