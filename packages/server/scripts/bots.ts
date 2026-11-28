@@ -16,12 +16,14 @@ import {
   CLIENT_ATTACK_RANGE,
   CLIENT_MOVE_DISTANCE,
   CLIENT_SHOP_RANGE,
+  CLOSE_MAP_MISMATCH,
   decodeServerMsg,
   encode,
   generateMap,
   isValidMoveTarget,
   ITEM_IDS,
   ITEMS,
+  MAP_LAYOUT_VERSION,
   MAX_TRADE_COUNT,
   maxBuy,
   merchantPosition,
@@ -195,9 +197,10 @@ class Bot {
 
   constructor(index: number, token: string) {
     this.ws = new WebSocket(URL_WS);
-    this.ws.on('open', () => this.send({ t: 'join', token }));
+    this.ws.on('open', () => this.send({ t: 'join', token, mapVersion: MAP_LAYOUT_VERSION }));
     this.ws.on('message', (data) => this.onMessage(data.toString()));
-    this.ws.on('close', () => {
+    this.ws.on('close', (code) => {
+      if (code === CLOSE_MAP_MISMATCH) console.error(`[bot ${index}] 地图版本不一致`);
       this.closed = true;
       this.ready = false;
     });
@@ -221,6 +224,10 @@ class Bot {
     if (!msg) return;
     switch (msg.t) {
       case 'welcome':
+        if (msg.mapVersion !== MAP_LAYOUT_VERSION) {
+          this.ws.close(CLOSE_MAP_MISMATCH, '地图版本不一致');
+          return;
+        }
         this.selfId = msg.selfId;
         map ??= generateMap(msg.seed);
         // 刚进入世界时，服务器那边药水先走一轮冷却。

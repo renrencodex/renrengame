@@ -11,6 +11,7 @@ import {
   isValidMoveTarget,
   isWalkable,
   ITEMS,
+  MAP_LAYOUT_VERSION,
   MAX_PATHFINDS_PER_TICK,
   MONSTER_MAX_HP,
   MONSTER_NAME,
@@ -272,7 +273,7 @@ export class World {
     };
     this.players.set(id, player);
     this.entities.set(id, player);
-    conn.send({ t: 'welcome', selfId: id, seed: this.map.seed, serverTime: now });
+    conn.send({ t: 'welcome', selfId: id, seed: this.map.seed, mapVersion: MAP_LAYOUT_VERSION, serverTime: now });
     this.sendInventory(player);
     this.addToView(player);
     return id;

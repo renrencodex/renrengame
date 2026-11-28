@@ -45,7 +45,7 @@ export type SnapEntity = [id: number, x: number, z: number, state: EntityState, 
 
 export type ClientMsg =
   /** token 是登录接口返回的会话令牌，服务端用它确定是哪个角色。 */
-  | { t: 'join'; token: string }
+  | { t: 'join'; token: string; mapVersion: number }
   | { t: 'moveTo'; x: number; z: number }
   /** 选中一个怪物作为攻击目标。id 为 0 表示取消目标。 */
   | { t: 'target'; id: number }
@@ -62,7 +62,7 @@ export type ClientMsg =
   | { t: 'ping'; c: number };
 
 export type ServerMsg =
-  | { t: 'welcome'; selfId: number; seed: number; serverTime: number }
+  | { t: 'welcome'; selfId: number; seed: number; mapVersion: number; serverTime: number }
   | { t: 'enter'; entities: EntityInfo[] }
   | { t: 'leave'; ids: number[] }
   | { t: 'snap'; time: number; entities: SnapEntity[] }
@@ -82,8 +82,11 @@ export function encode(msg: ClientMsg | ServerMsg): string {
   return JSON.stringify(msg);
 }
 
+// 旧页面还会发不带版本的 join，保留它以便服务端给出专用的关闭码。
+type DecodedClientMsg = ClientMsg | { t: 'join'; token: string; mapVersion?: undefined };
+
 /** 解析并校验客户端消息。格式不对时返回 null。 */
-export function decodeClientMsg(raw: string): ClientMsg | null {
+export function decodeClientMsg(raw: string): DecodedClientMsg | null {
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -94,9 +97,10 @@ export function decodeClientMsg(raw: string): ClientMsg | null {
   const m = value as Record<string, unknown>;
   switch (m.t) {
     case 'join':
-      return typeof m.token === 'string' && m.token.length > 0 && m.token.length <= MAX_TOKEN_LENGTH
-        ? { t: 'join', token: m.token }
-        : null;
+      if (typeof m.token !== 'string' || m.token.length === 0 || m.token.length > MAX_TOKEN_LENGTH) return null;
+      if (m.mapVersion === undefined) return { t: 'join', token: m.token };
+      if (typeof m.mapVersion !== 'number' || !Number.isSafeInteger(m.mapVersion) || m.mapVersion < 1) return null;
+      return { t: 'join', token: m.token, mapVersion: m.mapVersion };
     case 'moveTo':
       return isFiniteNumber(m.x) && isFiniteNumber(m.z) ? { t: 'moveTo', x: m.x, z: m.z } : null;
     case 'target':

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyMap, MAX_MOVE_DISTANCE, MAX_PATHFINDS_PER_TICK, SNAPSHOT_EVERY_TICKS, TICK_MS } from '@mmo/shared';
+import { emptyMap, MAP_LAYOUT_VERSION, MAX_MOVE_DISTANCE, MAX_PATHFINDS_PER_TICK, SNAPSHOT_EVERY_TICKS, TICK_MS } from '@mmo/shared';
 import type { ServerMsg } from '@mmo/shared';
 import { World } from '../src/world';
 import type { Connection } from '../src/world';
@@ -49,7 +49,7 @@ describe('World', () => {
 
     const [welcome, inv, enter, ...rest] = conn.take();
     expect(rest).toEqual([]);
-    expect(welcome).toEqual({ t: 'welcome', selfId: id, seed: 4242, serverTime: 1000 });
+    expect(welcome).toEqual({ t: 'welcome', selfId: id, seed: 4242, mapVersion: MAP_LAYOUT_VERSION, serverTime: 1000 });
     expect(inv).toEqual({ t: 'inv', items: {}, weapon: null });
     expect(enter).toEqual({
       t: 'enter',

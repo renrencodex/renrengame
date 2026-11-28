@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { generateMap, isWalkable, SPAWN_RADIUS, Terrain } from '@mmo/shared';
 import type { Inventory, ItemId } from '@mmo/shared';
 import { CharacterStore, spawnFromSave } from '../src/characters';
 import type { CharacterState, Queryable, SavedCharacter } from '../src/characters';
+import { World } from '../src/world';
 
 /** 库里的一行。items 是 jsonb 解析之后的值，可能是任何形状；weapon 是一段文字或者空。 */
 interface Row {
@@ -128,6 +130,28 @@ describe('spawnFromSave', () => {
 
   it('存的位置不可走时只保留血量', () => {
     expect(spawnFromSave(saved(10, 20, 37), () => false)).toEqual({ spawn: undefined, hp: 37 });
+  });
+
+  it('旧存档落在河里时回村，落在桥上时继续原地游玩', () => {
+    const map = generateMap(20261127);
+    const world = new World(map, () => 0.5);
+    const water = map.terrain.findIndex((surface) => surface === Terrain.Water);
+    const wall = map.obstacles.find((obstacle) => obstacle.kind === 'wall')!;
+    const bridge = map.bridges[1];
+    const conn = { send() {} };
+    const positions = [
+      { x: water % map.size + 0.5, z: Math.floor(water / map.size) + 0.5, resumes: false },
+      { x: wall.x + 0.5, z: wall.z + 0.5, resumes: false },
+      { x: bridge.x + bridge.w / 2, z: bridge.z + bridge.d / 2, resumes: true },
+    ];
+    for (const { x, z, resumes } of positions) {
+      const previous: SavedCharacter = { x, z, hp: 37, items: { potion: 2, gold: 12 }, weapon: 'sword' };
+      const { spawn, hp } = spawnFromSave(previous, (a, b) => isWalkable(map, a, b));
+      const player = world.getPlayer(world.join('旧角色', conn, 0, spawn, hp, previous.items, previous.weapon))!;
+      expect(player).toMatchObject({ hp: 37, items: previous.items, weapon: 'sword' });
+      if (resumes) expect(player).toMatchObject({ x, z });
+      else expect(Math.hypot(player.x - map.size / 2, player.z - map.size / 2)).toBeLessThanOrEqual(SPAWN_RADIUS);
+    }
   });
 });
 

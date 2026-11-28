@@ -3,6 +3,7 @@ import {
   decodeClientMsg,
   decodeServerMsg,
   encode,
+  MAP_LAYOUT_VERSION,
   MAX_NAME_LENGTH,
   MAX_TOKEN_LENGTH,
   MAX_TRADE_COUNT,
@@ -11,7 +12,8 @@ import {
 
 describe('protocol', () => {
   it('合法的客户端消息能往返编解码', () => {
-    expect(decodeClientMsg(encode({ t: 'join', token: 'abc123' }))).toEqual({ t: 'join', token: 'abc123' });
+    const join = { t: 'join', token: 'abc123', mapVersion: MAP_LAYOUT_VERSION } as const;
+    expect(decodeClientMsg(encode(join))).toEqual(join);
     expect(decodeClientMsg(encode({ t: 'moveTo', x: 1.5, z: -2 }))).toEqual({ t: 'moveTo', x: 1.5, z: -2 });
     expect(decodeClientMsg(encode({ t: 'ping', c: 42 }))).toEqual({ t: 'ping', c: 42 });
     expect(decodeClientMsg(encode({ t: 'target', id: 17 }))).toEqual({ t: 'target', id: 17 });
@@ -21,6 +23,10 @@ describe('protocol', () => {
     expect(decodeClientMsg(encode({ t: 'unequip' }))).toEqual({ t: 'unequip' });
     expect(decodeClientMsg(encode({ t: 'buy', item: 'potion', count: 2 }))).toEqual({ t: 'buy', item: 'potion', count: 2 });
     expect(decodeClientMsg(encode({ t: 'sell', item: 'sword', count: 1 }))).toEqual({ t: 'sell', item: 'sword', count: 1 });
+  });
+
+  it('服务端能认出没有地图版本的旧客户端', () => {
+    expect(decodeClientMsg('{"t":"join","token":"abc123"}')).toEqual({ t: 'join', token: 'abc123' });
   });
 
   it('拒绝格式不对的客户端消息', () => {
@@ -34,6 +40,12 @@ describe('protocol', () => {
       '{"t":"join"}',
       '{"t":"join","token":5}',
       '{"t":"join","token":""}',
+      '{"t":"join","token":"abc123","mapVersion":"2"}',
+      '{"t":"join","token":"abc123","mapVersion":null}',
+      '{"t":"join","token":"abc123","mapVersion":0}',
+      '{"t":"join","token":"abc123","mapVersion":-1}',
+      '{"t":"join","token":"abc123","mapVersion":1.5}',
+      '{"t":"join","token":"abc123","mapVersion":1e30}',
       '{"t":"join","name":"张三"}',
       `{"t":"join","token":"${'a'.repeat(MAX_TOKEN_LENGTH + 1)}"}`,
       '{"t":"moveTo","x":"1","z":2}',

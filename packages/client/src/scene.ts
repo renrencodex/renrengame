@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { merchantPosition, mulberry32, SAFE_ZONE_RADIUS } from '@mmo/shared';
+import { merchantPosition, SAFE_ZONE_RADIUS } from '@mmo/shared';
 import type { GameMap } from '@mmo/shared';
+import { createLandscape } from './landscape';
 
 const SKY_COLOR = 0xa8c8e8;
 /** 雾从离镜头这么远的地方开始，到这么远时完全盖住。按宽屏下镜头的默认远近定的。 */
@@ -9,10 +10,6 @@ const FOG_FAR = 180;
 /** 阴影只覆盖玩家周围这么大的范围，跟着玩家移动。 */
 const SHADOW_RANGE = 45;
 const SUN_OFFSET = new THREE.Vector3(-35, 60, 25);
-/** 障碍物画得比网格略小一圈，角色贴着走时不会明显穿进去。 */
-const OBSTACLE_INSET = 0.15;
-/** 地面贴图一格对应的世界单位。 */
-const GROUND_TILE = 4;
 const MERCHANT_RUG_RADIUS = 1.3;
 
 /** 3D 场景：地面、障碍物、安全区边界、商人的地毯、光照和雾。 */
@@ -43,9 +40,8 @@ export class WorldScene {
     this.sun = sun;
 
     scene.add(
-      createGround(map.size),
+      createLandscape(map),
       createSurroundings(map.size),
-      createObstacles(map),
       createSafeZoneRing(map.size),
       createMerchantRug(map.size),
     );
@@ -67,19 +63,6 @@ export class WorldScene {
     this.sun.target.position.set(x, 0, z);
     this.sun.target.updateMatrixWorld();
   }
-}
-
-function createGround(size: number): THREE.Mesh {
-  const texture = createGroundTexture();
-  texture.repeat.set(size / GROUND_TILE, size / GROUND_TILE);
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(size, size),
-    new THREE.MeshStandardMaterial({ map: texture, roughness: 1, metalness: 0 }),
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.set(size / 2, 0, size / 2);
-  ground.receiveShadow = true;
-  return ground;
 }
 
 /** 地图外面一圈深色的地面，让地图边界看得出来。 */
@@ -127,62 +110,4 @@ function createMerchantRug(size: number): THREE.Group {
   const at = merchantPosition(size);
   rug.position.set(at.x, 0.02, at.z);
   return rug;
-}
-
-/** 用 canvas 画一张可平铺的草地贴图，带浅浅的格线，移动时能看出速度。 */
-function createGroundTexture(): THREE.CanvasTexture {
-  const size = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
-  ctx.fillStyle = '#6f9e58';
-  ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < 500; i++) {
-    ctx.fillStyle = Math.random() < 0.5 ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.06)';
-    ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
-  }
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.10)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(0, 0, size, size);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 8;
-  return texture;
-}
-
-/** 所有障碍物合成一个 InstancedMesh，只占一次绘制调用。 */
-function createObstacles(map: GameMap): THREE.InstancedMesh {
-  const count = map.obstacles.length;
-  const mesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0 }),
-    count,
-  );
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-
-  const rand = mulberry32(map.seed ^ 0x5bd1e995);
-  const matrix = new THREE.Matrix4();
-  const position = new THREE.Vector3();
-  const scale = new THREE.Vector3();
-  const rotation = new THREE.Quaternion();
-  const color = new THREE.Color();
-
-  for (let i = 0; i < count; i++) {
-    const o = map.obstacles[i];
-    position.set(o.x + o.w / 2, o.h / 2, o.z + o.d / 2);
-    scale.set(o.w - OBSTACLE_INSET * 2, o.h, o.d - OBSTACLE_INSET * 2);
-    matrix.compose(position, rotation, scale);
-    mesh.setMatrixAt(i, matrix);
-    color.setHSL(0.07 + rand() * 0.05, 0.12 + rand() * 0.18, 0.5 + rand() * 0.2);
-    mesh.setColorAt(i, color);
-  }
-  mesh.instanceMatrix.needsUpdate = true;
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  mesh.computeBoundingSphere();
-  return mesh;
 }

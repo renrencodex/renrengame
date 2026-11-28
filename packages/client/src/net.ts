@@ -1,4 +1,4 @@
-import { decodeServerMsg, encode, WS_PATH } from '@mmo/shared';
+import { CLOSE_MAP_MISMATCH, decodeServerMsg, encode, MAP_LAYOUT_VERSION, WS_PATH } from '@mmo/shared';
 import type { ClientMsg, ServerMsg } from '@mmo/shared';
 
 interface ClockSample {
@@ -21,7 +21,7 @@ export class Net {
   /** 最近一次测到的往返延迟（毫秒）。 */
   rtt = 0;
   onMessage: (msg: ServerMsg) => void = () => {};
-  /** code 是 WebSocket 关闭码，服务端用 CLOSE_AUTH_FAILED、CLOSE_REPLACED 说明断开的原因。 */
+  /** code 是 WebSocket 关闭码，用来区分会话过期、地图更新等断开原因。 */
   onClose: (code: number) => void = () => {};
 
   private ws: WebSocket | null = null;
@@ -37,7 +37,7 @@ export class Net {
     this.ws = ws;
 
     ws.onopen = () => {
-      this.send({ t: 'join', token });
+      this.send({ t: 'join', token, mapVersion: MAP_LAYOUT_VERSION });
       this.ping();
     };
     ws.onmessage = (ev) => {
@@ -48,8 +48,14 @@ export class Net {
         this.onPong(msg.c, msg.s);
         return;
       }
-      // 第一个 pong 回来之前，先用 welcome 里的时间粗略对时。
-      if (msg.t === 'welcome' && this.samples.length === 0) this.offset = msg.serverTime - performance.now();
+      if (msg.t === 'welcome') {
+        if (msg.mapVersion !== MAP_LAYOUT_VERSION) {
+          ws.close(CLOSE_MAP_MISMATCH, '地图版本不一致');
+          return;
+        }
+        // 第一个 pong 回来之前，先用 welcome 里的时间粗略对时。
+        if (this.samples.length === 0) this.offset = msg.serverTime - performance.now();
+      }
       this.onMessage(msg);
     };
     ws.onclose = (ev) => {

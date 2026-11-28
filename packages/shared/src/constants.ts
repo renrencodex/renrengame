@@ -1,5 +1,7 @@
 /** 地图边长（世界单位）。可行走网格每格 1×1。 */
 export const MAP_SIZE = 256;
+/** 改动地图生成后递增，避免新旧客户端在不同的地图上预测移动。 */
+export const MAP_LAYOUT_VERSION = 2;
 /** 地图中心这个半径内不生成障碍物，留作出生点。 */
 export const SPAWN_CLEAR_RADIUS = 14;
 /** 新玩家出生在地图中心这个半径内。 */
@@ -145,3 +147,5 @@ export const CLOSE_SERVER_FULL = 1013;
 export const CLOSE_AUTH_FAILED = 4001;
 /** 同一个账号在别处进入了游戏，这个连接被顶掉。 */
 export const CLOSE_REPLACED = 4002;
+/** 地图布局不同，需要重新加载客户端。 */
+export const CLOSE_MAP_MISMATCH = 4003;

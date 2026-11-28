@@ -6,6 +6,7 @@ import {
   GOLD_DROP_MAX,
   GOLD_DROP_MIN,
   ITEMS,
+  MAP_LAYOUT_VERSION,
   PICKUP_RADIUS,
   PLAYER_MAX_HP,
   PLAYER_RESPAWN_MS,
@@ -341,7 +342,7 @@ describe('背包和药水', () => {
     const saved = { gold: 12, potion: 2 };
     const id = world.join('a', conn, 0, { x: 40.5, z: 40.5 }, undefined, saved);
     expect(conn.take().slice(0, 2)).toEqual([
-      { t: 'welcome', selfId: id, seed: 0, serverTime: 0 },
+      { t: 'welcome', selfId: id, seed: 0, mapVersion: MAP_LAYOUT_VERSION, serverTime: 0 },
       { t: 'inv', items: { gold: 12, potion: 2 }, weapon: null },
     ]);
 

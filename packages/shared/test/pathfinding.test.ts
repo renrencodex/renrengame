@@ -45,7 +45,10 @@ describe('generateMap', () => {
     const a = generateMap(12345);
     const b = generateMap(12345);
     expect(Array.from(a.blocked)).toEqual(Array.from(b.blocked));
+    expect(a.terrain).toEqual(b.terrain);
     expect(a.obstacles).toEqual(b.obstacles);
+    expect(a.bridges).toEqual(b.bridges);
+    expect(a.landmarks).toEqual(b.landmarks);
     expect(a.obstacles.length).toBeGreaterThan(100);
   });
 

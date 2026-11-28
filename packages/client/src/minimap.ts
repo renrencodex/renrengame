@@ -1,11 +1,25 @@
-import { merchantPosition, mulberry32, SAFE_ZONE_RADIUS } from '@mmo/shared';
-import type { GameMap, Point } from '@mmo/shared';
+import { merchantPosition, SAFE_ZONE_RADIUS, Terrain } from '@mmo/shared';
+import type { GameMap, Obstacle, Point } from '@mmo/shared';
 import { uiText } from './ui';
 
 const RADIUS = 32;
 const SIDE = 256;
 const TERRAIN_SCALE = 3;
 const UPDATE_MS = 100;
+const TERRAIN_COLORS: Record<Terrain, string> = {
+  [Terrain.Grass]: '#596744',
+  [Terrain.Forest]: '#3d5641',
+  [Terrain.Meadow]: '#7f874e',
+  [Terrain.Village]: '#857753',
+  [Terrain.Stone]: '#77796b',
+  [Terrain.Bank]: '#a19260',
+  [Terrain.Water]: '#386f80',
+  [Terrain.Road]: '#b39563',
+  [Terrain.Bridge]: '#d1ab6d',
+};
+const OBSTACLE_COLORS: Record<Obstacle['kind'], string> = {
+  tree: '#263c2d', rock: '#8a8a75', wall: '#bbb5a2', house: '#b28161', fence: '#554332', stall: '#a87353',
+};
 
 /** 地图标记留一点边距，避免标记的一半被圆框裁掉。 */
 export function minimapMarker(x: number, z: number, point: Point): Point | null {
@@ -28,7 +42,7 @@ export class Minimap {
 
   constructor() {
     this.element.className = 'minimap';
-    this.element.setAttribute('aria-label', '附近地形，青色圆环是安全区，金色标记是商人');
+    this.element.setAttribute('aria-label', '附近地形，青色圆环是安全区，金色标记是商人，浅色圆点是地标');
     this.canvas.width = SIDE;
     this.canvas.height = SIDE;
     this.canvas.setAttribute('aria-hidden', 'true');
@@ -95,19 +109,20 @@ function terrainImage(map: GameMap): HTMLCanvasElement | null {
   const ctx = terrain.getContext('2d');
   if (!ctx) return null;
   ctx.scale(TERRAIN_SCALE, TERRAIN_SCALE);
-  ctx.fillStyle = '#546643';
-  ctx.fillRect(0, 0, map.size, map.size);
-
-  const random = mulberry32(map.seed);
-  for (let i = 0; i < map.size * 5; i++) {
-    ctx.fillStyle = random() < 0.5 ? '#b4b57a20' : '#26363328';
-    ctx.fillRect(random() * map.size, random() * map.size, 1 + random() * 3, 1 + random() * 2);
+  for (let z = 0; z < map.size; z++) {
+    // 相邻的同色格子可以一次画完，保留桥和河岸的轮廓。
+    for (let x = 0; x < map.size;) {
+      const surface = map.terrain[z * map.size + x] as Terrain;
+      let end = x + 1;
+      while (end < map.size && map.terrain[z * map.size + end] === surface) end++;
+      ctx.fillStyle = TERRAIN_COLORS[surface];
+      ctx.fillRect(x, z, end - x, 1);
+      x = end;
+    }
   }
 
   for (const o of map.obstacles) {
-    ctx.fillStyle = '#29372b';
-    ctx.fillRect(o.x + 0.45, o.z + 0.45, o.w, o.d);
-    ctx.fillStyle = o.h > 2.5 ? '#ada991' : '#83907a';
+    ctx.fillStyle = OBSTACLE_COLORS[o.kind];
     ctx.fillRect(o.x, o.z, o.w, o.d);
   }
 
@@ -118,5 +133,14 @@ function terrainImage(map: GameMap): HTMLCanvasElement | null {
   ctx.lineWidth = 0.55;
   ctx.fill();
   ctx.stroke();
+  for (const landmark of map.landmarks) {
+    ctx.beginPath();
+    ctx.arc(landmark.x, landmark.z, 1.12, 0, Math.PI * 2);
+    ctx.fillStyle = '#eddbb2';
+    ctx.strokeStyle = '#3a3024';
+    ctx.lineWidth = 0.45;
+    ctx.fill();
+    ctx.stroke();
+  }
   return terrain;
 }

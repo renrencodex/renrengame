@@ -1,6 +1,7 @@
 import './style.css';
 import {
   CLOSE_AUTH_FAILED,
+  CLOSE_MAP_MISMATCH,
   CLOSE_REPLACED,
   CLOSE_SERVER_FULL,
   isValidPassword,
@@ -170,6 +171,8 @@ async function enterWorld(): Promise<void> {
       else show('login', '登录已过期，请重新登录。');
     } else if (code === CLOSE_REPLACED) {
       show('ended', '这个账号在别处进入了游戏，这里的连接已断开。');
+    } else if (code === CLOSE_MAP_MISMATCH) {
+      show('ended', '地图已更新，请刷新页面后进入游戏。');
     } else if (game) {
       show('ended', '和服务器的连接断开了。');
     } else if (code === CLOSE_SERVER_FULL) {

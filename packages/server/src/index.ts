@@ -3,12 +3,14 @@ import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   CLOSE_AUTH_FAILED,
+  CLOSE_MAP_MISMATCH,
   CLOSE_REPLACED,
   CLOSE_SERVER_FULL,
   decodeClientMsg,
   encode,
   generateMap,
   isWalkable,
+  MAP_LAYOUT_VERSION,
   MONSTER_COUNT,
   sameInventory,
   TICK_MS,
@@ -278,6 +280,10 @@ async function main(): Promise<void> {
           // 每个连接只处理一次 join，不管成功还是失败。
           if (client.joining) return;
           client.joining = true;
+          if (msg.mapVersion !== MAP_LAYOUT_VERSION) {
+            ws.close(CLOSE_MAP_MISMATCH, '地图版本不一致，请刷新页面');
+            break;
+          }
           void enter(client, msg.token);
           break;
         case 'moveTo':
